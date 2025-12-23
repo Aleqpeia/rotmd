@@ -1,0 +1,168 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "rotmd"
+version = "0.1.0"
+description = "Angular momentum and orientational dynamics analysis for membrane-bound proteins"
+authors = ["Mykyta Bobylyow <your.email@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "rotmd", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^2.1.0"
+scipy = "^1.11"
+MDAnalysis = "^2.9.0"
+matplotlib = "^3.8"
+xarray = ">=2024.1"
+h5py = "^3.10"
+numba = ">=0.59"
+click = "^8.1"
+jax = "^0.7.0"
+optax = "^0.2.1"
+rich = "^13.0"
+pydantic = "^2.5"
+pyyaml = "^6.0"
+tqdm = "^4.66"
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-cov = "^5.0"
+pytest-xdist = "^3.5"
+hypothesis = "^6.100"
+mypy = "^1.8"
+ruff = ">=0.4"
+pre-commit = "^3.6"
+ipython = "^8.20"
+
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "^7.2"
+sphinx-rtd-theme = "^2.0"
+sphinx-autodoc-typehints = "^2.0"
+myst-parser = "^3.0"
+nbsphinx = ">=0.9"
+
+[tool.poetry.group.jupyter]
+optional = true
+
+[tool.poetry.group.jupyter.dependencies]
+jupyterlab = "^4.0"
+ipywidgets = "^8.1"
+nglview = "^3.1"
+
+[tool.poetry.scripts]
+rotmd = "rotmd.cli:main"
+
+# =============================================================================
+# Type Checking
+# =============================================================================
+[tool.mypy]
+plugins = ["pydantic.mypy", "numpy.typing.mypy_plugin"]
+python_version = "3.13"
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+warn_redundant_casts = true
+strict_equality = true
+strict_bytes = true
+show_error_context = true
+show_column_numbers = true
+show_error_code_links = true
+pretty = true
+disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = ["MDAnalysis.*", "scipy.*", "h5py.*", "numba.*", "nglview.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# =============================================================================
+# Formatting & Linting
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # Pyflakes
+  "I",    # isort
+  "N",    # pep8-naming
+  "UP",   # pyupgrade
+  "B",    # flake8-bugbear
+  "C4",   # flake8-comprehensions
+  "DTZ",  # flake8-datetimez
+  "T10",  # flake8-debugger
+  "ISC",  # flake8-implicit-str-concat
+  "PIE",  # flake8-pie
+  "PT",   # flake8-pytest-style
+  "Q",    # flake8-quotes
+  "RET",  # flake8-return
+  "SIM",  # flake8-simplify
+  "TCH",  # flake8-type-checking
+  "ARG",  # flake8-unused-arguments
+  "PTH",  # flake8-use-pathlib
+  "NPY",  # NumPy-specific rules
+  "PERF", # Perflint
+  "RUF",  # Ruff-specific rules
+]
+ignore = [
+  "E501", # line too long (handled by formatter)
+  "B008", # function call in default argument (needed for click)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG001", "S101"]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rotmd"]
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+
+# =============================================================================
+# Testing
+# =============================================================================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-ra", "-q", "--strict-markers", "-x", "--tb=short"]
+markers = ["slow: marks tests as slow", "integration: marks integration tests"]
+filterwarnings = ["ignore::DeprecationWarning:MDAnalysis.*"]
+
+[tool.coverage.run]
+source = ["src/rotmd"]
+branch = true
+omit = ["*/__init__.py", "*/cli.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+  "@abstractmethod",
+]
+show_missing = true
