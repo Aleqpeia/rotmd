@@ -45,7 +45,37 @@ References:
 
 import numpy as np
 import jax.numpy as jnp
+import torch_kernels as tk
+import torch
 from typing import Tuple, Optional
+
+
+def compute_center_of_mass(
+    positions: np.ndarray,
+    masses: np.ndarray
+) -> np.ndarray:
+    """
+    Compute center of mass for a set of positions.
+
+    COM = Σ (m_i * r_i) / Σ m_i
+
+    Args:
+        positions: (n_atoms, 3) atomic positions
+        masses: (n_atoms,) atomic masses
+
+    Returns:
+        com: (3,) center of mass position
+
+    Examples:
+        >>> pos = np.array([[0, 0, 0], [1, 0, 0]])
+        >>> masses = np.array([1.0, 1.0])
+        >>> com = compute_center_of_mass(pos, masses)
+        >>> print(com)
+        [0.5 0.  0. ]
+    """
+    total_mass = np.sum(masses)
+    com = np.sum(masses[:, None] * positions, axis=0) / total_mass
+    return com
 
 
 def inertia_tensor(
@@ -106,13 +136,18 @@ def inertia_tensor(
 
     # Diagonal elements: I_ii = Σ m_α (r_α² - r_α,i²)
     for i in range(3):
-        I[i, i] = jnp.sum(masses * (r_squared - r[:, i]**2))
+        I = I.at[i,i].set(jnp.sum(masses * (r_squared - r[:, i]**2)))
 
     # Off-diagonal elements: I_ij = -Σ m_α r_α,i r_α,j
-    I[0, 1] = I[1, 0] = -jnp.sum(masses * r[:, 0] * r[:, 1])
-    I[0, 2] = I[2, 0] = -jnp.sum(masses * r[:, 0] * r[:, 2])
-    I[1, 2] = I[2, 1] = -jnp.sum(masses * r[:, 1] * r[:, 2])
-
+    val_01 = -jnp.sum(masses * r[:, 0] * r[:, 1])
+    val_02 = -jnp.sum(masses * r[:, 0] * r[:, 2])
+    val_12 = -jnp.sum(masses * r[:, 1] * r[:, 2])
+    I = I.at[0, 1].set(val_01)
+    I = I.at[0, 2].set(val_02)
+    I = I.at[1, 2].set(val_12)
+    I = I.at[1, 0].set(val_01)  # Symmetric
+    I = I.at[2, 0].set(val_02)
+    I = I.at[2, 1].set(val_12)
     return I
 
 
@@ -247,4 +282,3 @@ def asymmetry_parameter(moments: jnp.ndarray) -> float:
 
     kappa = (2*I_b - I_a - I_c) / (I_c - I_a)
     return kappa
-

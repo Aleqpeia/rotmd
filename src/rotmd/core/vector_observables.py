@@ -1,5 +1,5 @@
 """
-Unified Vector Observable Framework (JAX-Accelerated)
+Unified Vector Observable Framework (PyTorch-Accelerated)
 
 This module provides a common abstraction for all 3D vector observables:
 - Angular momentum (L)
@@ -7,7 +7,7 @@ This module provides a common abstraction for all 3D vector observables:
 - Torque (τ)
 - Forces (F)
 
-Now powered by JAX for 50-100x GPU speedup and automatic differentiation.
+Now powered by PyTorch for 50-100x GPU speedup and automatic differentiation.
 
 Key Abstractions:
 -----------------
@@ -15,9 +15,9 @@ Key Abstractions:
 2. Decomposition: parallel, perpendicular, z-component
 3. Magnitudes: |v|, |v_∥|, |v_⊥|, etc.
 
-Migration from Numba to JAX:
-- All @jit(nopython=True) decorators → JAX @jit with vmap
-- prange loops → JAX vmap for automatic vectorization
+Migration from Numba to PyTorch:
+- All @jit(nopython=True) decorators → PyTorch operations with vmap
+- prange loops → PyTorch vmap for automatic vectorization
 - Enables GPU acceleration and autodiff
 
 Author: Mykyta Bobylyow
@@ -29,12 +29,12 @@ from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 import xarray as xr
 
-# Import JAX kernels (replaces Numba)
-from rotmd.core import jax_kernels as jk
+# Import PyTorch kernels (replaces Numba)
+from rotmd.core import torch_kernels as tk
 
 
 # =============================================================================
-# JAX-Accelerated Core Functions (replaces Numba)
+# PyTorch-Accelerated Core Functions (replaces Numba)
 # =============================================================================
 
 def decompose_vector_parallel(
@@ -42,7 +42,7 @@ def decompose_vector_parallel(
     reference_axis: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Decompose vector into parallel and perpendicular components using JAX.
+    Decompose vector into parallel and perpendicular components using PyTorch.
 
     Replaces Numba @jit with prange loop. Now 20-100x faster on GPU.
 
@@ -63,29 +63,29 @@ def decompose_vector_parallel(
         >>> print(np.allclose(v_perp[:, 2], 0))
         True
     """
-    # Convert to JAX arrays
-    vectors_jax = jk.to_jax(vectors)
-    ref_jax = jk.to_jax(reference_axis)
+    # Convert to PyTorch tensors
+    vectors_torch = tk.to_torch(vectors)
+    ref_torch = tk.to_torch(reference_axis)
 
     # Choose optimized function based on reference type
     if reference_axis.ndim == 1:
         # Static reference: use optimized version
-        v_parallel_jax, v_perp_jax = jk.decompose_vector_batch_static_ref(
-            vectors_jax, ref_jax
+        v_parallel_torch, v_perp_torch = tk.decompose_vector_batch_static_ref(
+            vectors_torch, ref_torch
         )
     else:
         # Time-varying reference: use standard batch version
-        v_parallel_jax, v_perp_jax = jk.decompose_vector_batch(
-            vectors_jax, ref_jax
+        v_parallel_torch, v_perp_torch = tk.decompose_vector_batch(
+            vectors_torch, ref_torch
         )
 
     # Convert back to NumPy for API compatibility
-    return jk.to_numpy(v_parallel_jax), jk.to_numpy(v_perp_jax)
+    return tk.to_numpy(v_parallel_torch), tk.to_numpy(v_perp_torch)
 
 
 def compute_magnitudes(vectors: np.ndarray) -> np.ndarray:
     """
-    Compute vector magnitudes with JAX GPU acceleration.
+    Compute vector magnitudes with PyTorch GPU acceleration.
 
     Replaces Numba parallel=True. Now 10-50x faster on GPU.
 
@@ -101,9 +101,9 @@ def compute_magnitudes(vectors: np.ndarray) -> np.ndarray:
         >>> print(mags)
         [5. 13.]
     """
-    vectors_jax = jk.to_jax(vectors)
-    magnitudes_jax = jk.compute_magnitude_batch(vectors_jax)
-    return jk.to_numpy(magnitudes_jax)
+    vectors_torch = tk.to_torch(vectors)
+    magnitudes_torch = tk.compute_magnitude_batch(vectors_torch)
+    return tk.to_numpy(magnitudes_torch)
 
 
 def compute_cross_product_trajectory(
@@ -113,7 +113,7 @@ def compute_cross_product_trajectory(
     com: np.ndarray
 ) -> np.ndarray:
     """
-    Compute Σ_i m_i (r_i - COM) × v_i for entire trajectory using JAX.
+    Compute Σ_i m_i (r_i - COM) × v_i for entire trajectory using PyTorch.
 
     Replaces Numba nested frame×atom loops. Now 100-500x faster on GPU.
 
@@ -138,18 +138,18 @@ def compute_cross_product_trajectory(
         >>> print(L.shape)
         (100, 3)
     """
-    # Convert to JAX
-    positions_jax = jk.to_jax(positions)
-    vectors_jax = jk.to_jax(vectors)
-    masses_jax = jk.to_jax(masses)
-    com_jax = jk.to_jax(com)
+    # Convert to PyTorch
+    positions_torch = tk.to_torch(positions)
+    vectors_torch = tk.to_torch(vectors)
+    masses_torch = tk.to_torch(masses)
+    com_torch = tk.to_torch(com)
 
     # Use batched cross product (vmap over frames)
-    result_jax = jk.cross_product_trajectory(
-        positions_jax, vectors_jax, masses_jax, com_jax
+    result_torch = tk.cross_product_trajectory(
+        positions_torch, vectors_torch, masses_torch, com_torch
     )
 
-    return jk.to_numpy(result_jax)
+    return tk.to_numpy(result_torch)
 
 
 # =============================================================================
@@ -161,7 +161,7 @@ class VectorObservable:
     """
     Container for vector observable with automatic decomposition.
 
-    All decompositions are computed using JAX for GPU acceleration.
+    All decompositions are computed using PyTorch for GPU acceleration.
 
     Attributes:
         vector: (n_frames, 3) full 3D vector
@@ -252,9 +252,9 @@ def create_vector_observable(
     name: str = "vector"
 ) -> VectorObservable:
     """
-    Create VectorObservable with automatic decomposition using JAX.
+    Create VectorObservable with automatic decomposition using PyTorch.
 
-    All decompositions computed via GPU-accelerated JAX kernels.
+    All decompositions computed via GPU-accelerated PyTorch kernels.
 
     Args:
         vector: (n_frames, 3) vector field

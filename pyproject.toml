@@ -19,10 +19,10 @@ MDAnalysis = "^2.9.0"
 matplotlib = "^3.8"
 xarray = ">=2024.1"
 h5py = "^3.10"
-numba = ">=0.59"
-click = "^8.1"
-jax = "^0.7.0"
+# JAX for GPU-accelerated computing (replaces numba)
+jax = {version = "^0.4.23", extras = ["cuda12_pip"]}
 optax = "^0.2.1"
+click = "^8.1"
 rich = "^13.0"
 pydantic = "^2.5"
 pyyaml = "^6.0"

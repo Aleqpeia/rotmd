@@ -1,0 +1,19 @@
+processes:
+  archivarius:
+    command: python extract_data.py
+    cwd: .
+    environment:
+      PYTHONUNBUFFERED: "1"
+    autostart: true
+    restart: "no"
+    # Add more processes as needed, for example:
+    # postprocess:
+    #   command: python postprocess.py
+    #   cwd: .
+    #   autostart: false
+    #   depends_on:
+    #     - extractor
+settings:
+  # Optional: adjust as needed
+  log_location: ./compose-logs
+  log_level: info

@@ -106,8 +106,7 @@ class VectorObservable(Observable):
         >>> print(L.parallel.magnitude.mean)  # Lazy decomposition
         >>> L.to_xarray().to_netcdf('L.nc')
     """
-    _data: np.ndarray = field(repr=False)  # (n_frames, 3)
-    reference_axis: np.ndarray = field(repr=False)  # (n_frames, 3) or (3,)
+    reference_axis: np.ndarray = field(default_factory=lambda: np.array([1, 0, 0]), repr=False)
     membrane_normal: np.ndarray = field(default_factory=lambda: np.array([0, 0, 1]), repr=False)
 
     @cached_property

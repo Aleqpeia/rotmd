@@ -1,25 +1,22 @@
 """
-rotmd - Rotational Molecular Dynamics Analysis Toolkit
+Protein Orientation Analysis Toolkit
 
-A high-performance toolkit for analyzing protein rotational dynamics from MD trajectories.
-Optimized with numba, JAX, xarray, and includes progress tracking with tqdm.
+A comprehensive toolkit for analyzing protein rotational dynamics from MD trajectories.
 
 Main Features:
 - Euler angle extraction and orientation analysis
 - Angular momentum and torque calculations
 - PMF computation and free energy landscapes
 - Rotational diffusion analysis
-- Langevin dynamics modeling with JAX/optax
+- Langevin dynamics modeling
 - Comprehensive visualization tools
-- Fast numba-compiled numerical kernels
-- xarray-based data management with metadata
 
 Quick Start:
-    >>> from rotmd import analyze_trajectory
+    >>> from protein_orientation import analyze_trajectory
     >>> results = analyze_trajectory('system.gro', 'traj.trr')
 
 For CLI usage:
-    $ rotmd analyze system.gro traj.trr -o results/
+    $ protein-orientation analyze system.gro traj.trr -o results/
 
 Author: Mykyta Bobylyow
 Date: 2025
@@ -44,21 +41,18 @@ from .core.orientation import (
 )
 
 # Observables
-# Note: angular_momentum, angular_velocity, and torque modules were consolidated
-# into observables/unified.py for the JAX migration. Use compute_all_observables instead.
-# from .observables.angular_momentum import (
-#     compute_angular_momentum,
-#     decompose_angular_momentum,
-# )
-# from .observables.angular_velocity import (
-#     angular_velocity_from_rotation_matrices,
-#     compute_angular_velocity_from_trajectory
-# )
-# from .observables.torque import (
-#     compute_torque,
-#     validate_euler_equation
-# )
-from .observables.unified import compute_all_observables
+from .observables.angular_momentum import (
+    compute_angular_momentum,
+    decompose_angular_momentum,
+)
+from .observables.angular_velocity import (
+    angular_velocity_from_rotation_matrices,
+    compute_angular_velocity_from_trajectory
+)
+from .observables.torque import (
+    compute_torque,
+    validate_euler_equation
+)
 from .observables.diffusion import (
     mean_squared_angular_displacement,
     extract_diffusion_coefficient,
@@ -147,14 +141,14 @@ def analyze_trajectory(topology: str,
         results: Dictionary with all analysis results
 
     Example:
-        >>> from rotmd import analyze_trajectory
+        >>> from protein_orientation import analyze_trajectory
         >>> results = analyze_trajectory('system.gro', 'traj.trr')
         >>> print(f"Diffusion coefficient: {results['D_msad']:.3f} rad²/ps")
         >>> print(f"Mean nutation angle: {np.degrees(results['theta_mean']):.1f}°")
 
     See Also:
         - For more control, use individual functions from submodules
-        - For CLI usage: `rotmd analyze ...`
+        - For CLI usage: `protein-orientation analyze ...`
     """
     from pathlib import Path
 
@@ -313,13 +307,12 @@ __all__ = [
     'unwrap_euler_angles',
 
     # Observables
-    'compute_all_observables',  # Unified API (replaces individual functions)
-    # 'compute_angular_momentum',  # Moved to unified.py
-    # 'decompose_angular_momentum',  # Moved to unified.py
-    # 'angular_velocity_from_rotation_matrices',  # Moved to unified.py
-    # 'compute_angular_velocity_from_trajectory',  # Moved to unified.py
-    # 'compute_torque',  # Moved to unified.py
-    # 'validate_euler_equation',  # Moved to unified.py
+    'compute_angular_momentum',
+    'decompose_angular_momentum',
+    'angular_velocity_from_rotation_matrices',
+    'compute_angular_velocity_from_trajectory',
+    'compute_torque',
+    'validate_euler_equation',
     'mean_squared_angular_displacement',
     'extract_diffusion_coefficient',
     'analyze_diffusion',

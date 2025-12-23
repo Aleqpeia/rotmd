@@ -13,6 +13,9 @@ from .inertia import (
     principal_axes,
     principal_moments,
     parallel_axis_theorem,
+    is_symmetric_top,
+    is_spherical_top,
+    is_asymmetric_top
 )
 
 __all__ = [
@@ -20,4 +23,7 @@ __all__ = [
     'principal_axes',
     'principal_moments',
     'parallel_axis_theorem',
+    'is_symmetric_top',
+    'is_spherical_top',
+    'is_asymmetric_top'
 ]

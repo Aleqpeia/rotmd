@@ -16,10 +16,10 @@ from tqdm import tqdm
 
 from rotmd.core.vector_observables import (
     compute_cross_product_trajectory,
-    decompose_vector_observable,
+    decompose_vector_parallel,
     VectorObservable
 )
-from rotmd.core.inertia import compute_center_of_mass
+from rotmd.core.inertia import compute_center_of_mass 
 
 
 # =============================================================================
@@ -82,7 +82,7 @@ def compute_angular_momentum(
     principal_axis = principal_axes[:, :, 0]  # (n_frames, 3)
 
     # Decompose using unified framework
-    return decompose_vector_observable(
+    return decompose_vector_parallel(
         L, principal_axis, membrane_normal, times, name='L', verbose=verbose
     )
 
@@ -150,7 +150,7 @@ def compute_torque(
     principal_axis = principal_axes[:, :, 0]
 
     # Decompose using unified framework
-    return decompose_vector_observable(
+    return decompose_vector_parallel(
         tau, principal_axis, membrane_normal, times, name='tau', verbose=verbose
     )
 
@@ -208,7 +208,7 @@ def compute_angular_velocity_from_inertia(
     principal_axis = principal_axes[:, :, 0]
 
     # Decompose using unified framework
-    return decompose_vector_observable(
+    return decompose_vector_parallel(
         omega, principal_axis, membrane_normal, times, name='omega', verbose=verbose
     )
 
