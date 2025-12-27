@@ -44,16 +44,11 @@ References:
 """
 
 import numpy as np
-import jax.numpy as jnp
-import torch_kernels as tk
-import torch
+
 from typing import Tuple, Optional
 
 
-def compute_center_of_mass(
-    positions: np.ndarray,
-    masses: np.ndarray
-) -> np.ndarray:
+def compute_center_of_mass(positions: np.ndarray, masses: np.ndarray) -> np.ndarray:
     """
     Compute center of mass for a set of positions.
 
@@ -79,10 +74,10 @@ def compute_center_of_mass(
 
 
 def inertia_tensor(
-    positions: jnp.ndarray,
-    masses: jnp.ndarray,
-    center_of_mass: Optional[jnp.ndarray] = None
-) -> jnp.ndarray:
+    positions: np.ndarray,
+    masses: np.ndarray,
+    center_of_mass: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Compute the 3×3 inertia tensor for a collection of point masses.
 
@@ -105,12 +100,12 @@ def inertia_tensor(
         - Off-diagonal elements: I_xy = -Σ m·x·y, etc.
 
     Example:
-        >>> positions = jnp.random.randn(100, 3)  # 100 atoms
-        >>> masses = jnp.ones(100)  # Equal masses
+        >>> positions = np.random.randn(100, 3)  # 100 atoms
+        >>> masses = np.ones(100)  # Equal masses
         >>> I = inertia_tensor(positions, masses)
         >>> print(I.shape)
         (3, 3)
-        >>> assert jnp.allclose(I, I.T)  # Symmetric
+        >>> assert np.allclose(I, I.T)  # Symmetric
     """
     if positions.shape[0] != len(masses):
         raise ValueError(
@@ -123,35 +118,30 @@ def inertia_tensor(
 
     # Compute center of mass if not provided
     if center_of_mass is None:
-        center_of_mass = jnp.average(positions, weights=masses, axis=0)
+        center_of_mass = np.average(positions, weights=masses, axis=0)
 
     # Shift to COM frame
     r = positions - center_of_mass  # Shape (N, 3)
 
     # Compute r² = x² + y² + z² for each atom
-    r_squared = jnp.sum(r**2, axis=1)  # Shape (N,)
+    r_squared = np.sum(r**2, axis=1)  # Shape (N,)
 
     # Initialize inertia tensor
-    I = jnp.zeros((3, 3))
+    I = np.zeros((3, 3))
 
     # Diagonal elements: I_ii = Σ m_α (r_α² - r_α,i²)
     for i in range(3):
-        I = I.at[i,i].set(jnp.sum(masses * (r_squared - r[:, i]**2)))
+        I[i, i] = np.sum(masses * (r_squared - r[:, i] ** 2))
 
     # Off-diagonal elements: I_ij = -Σ m_α r_α,i r_α,j
-    val_01 = -jnp.sum(masses * r[:, 0] * r[:, 1])
-    val_02 = -jnp.sum(masses * r[:, 0] * r[:, 2])
-    val_12 = -jnp.sum(masses * r[:, 1] * r[:, 2])
-    I = I.at[0, 1].set(val_01)
-    I = I.at[0, 2].set(val_02)
-    I = I.at[1, 2].set(val_12)
-    I = I.at[1, 0].set(val_01)  # Symmetric
-    I = I.at[2, 0].set(val_02)
-    I = I.at[2, 1].set(val_12)
+    # Off-diagonal elements: I_ij = -Σ m_α r_α,i r_α,j
+    I[0, 1] = I[1, 0] = -np.sum(masses * r[:, 0] * r[:, 1])
+    I[0, 2] = I[2, 0] = -np.sum(masses * r[:, 0] * r[:, 2])
+    I[1, 2] = I[2, 1] = -np.sum(masses * r[:, 1] * r[:, 2])
     return I
 
 
-def principal_axes(I: jnp.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def principal_axes(I: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Diagonalize inertia tensor to find principal axes and moments.
 
@@ -182,7 +172,7 @@ def principal_axes(I: jnp.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         - I_body = R^T · I · R = diag(I_a, I_b, I_c)
 
     Example:
-        >>> I = jnp.diag([100, 200, 300])  # Already diagonal
+        >>> I = np.diag([100, 200, 300])  # Already diagonal
         >>> moments, axes = principal_axes(I)
         >>> print(moments)
         [100. 200. 300.]
@@ -194,19 +184,19 @@ def principal_axes(I: jnp.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     if I.shape != (3, 3):
         raise ValueError(f"Inertia tensor must be 3×3, got {I.shape}")
 
-    if not jnp.allclose(I, I.T):
+    if not np.allclose(I, I.T):
         raise ValueError("Inertia tensor must be symmetric")
 
     # Solve eigenvalue problem
-    eigenvalues, eigenvectors = jnp.linalg.eigh(I)
+    eigenvalues, eigenvectors = np.linalg.eigh(I)
 
     # Sort by eigenvalues (ascending: I_a ≤ I_b ≤ I_c)
-    sort_indices = jnp.argsort(eigenvalues)
+    sort_indices = np.argsort(eigenvalues)
     moments = eigenvalues[sort_indices]
     axes = eigenvectors[:, sort_indices]
 
     # Ensure proper rotation (det = +1, not -1)
-    if jnp.linalg.det(axes) < 0:
+    if np.linalg.det(axes) < 0:
         # Flip one axis to convert reflection → rotation
         axes[:, 0] *= -1
 
@@ -214,10 +204,10 @@ def principal_axes(I: jnp.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def principal_moments(
-    positions: jnp.ndarray,
-    masses: jnp.ndarray,
-    center_of_mass: Optional[jnp.ndarray] = None
-) -> Tuple[jnp.ndarray, np.ndarray]:
+    positions: np.ndarray,
+    masses: np.ndarray,
+    center_of_mass: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute principal moments and axes directly from positions and masses.
 
@@ -235,9 +225,9 @@ def principal_moments(
 
     Example:
         >>> # Elongated protein along z-axis
-        >>> positions = jnp.random.randn(100, 3)
+        >>> positions = np.random.randn(100, 3)
         >>> positions[:, 2] *= 3  # Stretch along z
-        >>> masses = jnp.ones(100)
+        >>> masses = np.ones(100)
         >>> moments, axes = principal_moments(positions, masses)
         >>> print(f"I_a = {moments[0]:.1f}")
         >>> print(f"I_b = {moments[1]:.1f}")
@@ -249,25 +239,23 @@ def principal_moments(
 
 
 def parallel_axis_theorem(
-    I_com: jnp.ndarray,
-    total_mass: float,
-    displacement: jnp.ndarray
-) -> jnp.ndarray:
+    I_com: np.ndarray, total_mass: float, displacement: np.ndarray
+) -> np.ndarray:
     """
     Apply parallel axis theorem to shift inertia tensor to a new origin.
 
     The parallel axis theorem states:
         I_new = I_com + M [(d · d) I_3 - d ⊗ d]
     """
-    d = jnp.asarray(displacement)
-    d_squared = jnp.dot(d, d)
+    d = np.asarray(displacement)
+    d_squared = np.dot(d, d)
     # Steiner term: M [(d · d) I_3 - d ⊗ d]
-    steiner = total_mass * (d_squared * jnp.eye(3) - np.outer(d, d))
+    steiner = total_mass * (d_squared * np.eye(3) - np.outer(d, d))
 
     return I_com + steiner
 
 
-def asymmetry_parameter(moments: jnp.ndarray) -> float:
+def asymmetry_parameter(moments: np.ndarray) -> float:
     """
     Compute Ray's asymmetry parameter κ.
 
@@ -276,9 +264,9 @@ def asymmetry_parameter(moments: jnp.ndarray) -> float:
     """
     I_a, I_b, I_c = moments
 
-    if jnp.isclose(I_c, I_a):
+    if np.isclose(I_c, I_a):
         # Spherical top: κ undefined, return 0
         return 0.0
 
-    kappa = (2*I_b - I_a - I_c) / (I_c - I_a)
+    kappa = (2 * I_b - I_a - I_c) / (I_c - I_a)
     return kappa

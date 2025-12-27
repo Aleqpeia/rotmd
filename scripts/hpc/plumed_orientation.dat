@@ -1,0 +1,65 @@
+# =============================================================================
+# PLUMED input for peripheral protein orientation dynamics
+# CVs: COM.z (insertion), theta (tilt), phi (spin - unbiased)
+# =============================================================================
+
+# Protein atoms (adjust range to your system)
+MOLINFO STRUCTURE=reference.pdb
+
+# -----------------------------------------------------------------------------
+# CV1: Center of mass Z-coordinate (insertion depth)
+# -----------------------------------------------------------------------------
+protein: GROUP ATOMS=1-3082
+com: COM ATOMS=protein
+com_z: COMBINE ARG=com.z COEFFICIENTS=0.1 PERIODIC=NO  # Convert to nm
+
+# -----------------------------------------------------------------------------
+# CV2: Theta (tilt angle between principal axis and membrane normal)
+# Using gyration tensor eigenvalues
+# -----------------------------------------------------------------------------
+gyr: GYRATION TYPE=GTPC_1 ATOMS=protein  # First principal component
+
+# Project onto z-axis to get cos(theta)
+# Principal axis from GTPC_1 gives direction, compute angle with z=[0,0,1]
+cos_theta: COMBINE ARG=gyr.eigvec1z PERIODIC=NO
+
+# theta = acos(|cos_theta|) - we want angle in [0, 90]
+theta: MATHEVAL ARG=cos_theta FUNC=acos(abs(x))*180/pi PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# CV3: Phi (spin angle) - TRACKED ONLY, NOT BIASED
+# Precession around membrane normal
+# -----------------------------------------------------------------------------
+# Project principal axis onto xy-plane and compute angle
+phi: MATHEVAL ARG=gyr.eigvec1x,gyr.eigvec1y FUNC=atan2(y,x)*180/pi PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# Metadynamics on (com_z, theta)
+# -----------------------------------------------------------------------------
+metad: METAD ...
+  ARG=com_z,theta
+  SIGMA=0.05,5.0
+  HEIGHT=1.2
+  PACE=500
+  BIASFACTOR=15
+  TEMP=310
+  GRID_MIN=-3.0,0
+  GRID_MAX=3.0,90
+  GRID_BIN=300,180
+  FILE=HILLS
+  CALC_RCT
+  RCT_USTRIDE=100
+...
+
+# -----------------------------------------------------------------------------
+# Walls on theta: restrict to [20, 90] degrees
+# -----------------------------------------------------------------------------
+lwall: LOWER_WALLS ARG=theta AT=20 KAPPA=150.0 EXP=2 EPS=1 OFFSET=0
+uwall: UPPER_WALLS ARG=theta AT=90 KAPPA=150.0 EXP=2 EPS=1 OFFSET=0
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+PRINT ARG=com_z,theta,phi,metad.bias,metad.rct STRIDE=100 FILE=COLVAR
+PRINT ARG=lwall.bias,uwall.bias STRIDE=100 FILE=WALLS
+FLUSH STRIDE=1000

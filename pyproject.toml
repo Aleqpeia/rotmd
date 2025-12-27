@@ -6,27 +6,33 @@ build-backend = "poetry.core.masonry.api"
 name = "rotmd"
 version = "0.1.0"
 description = "Angular momentum and orientational dynamics analysis for membrane-bound proteins"
-authors = ["Mykyta Bobylyow <your.email@example.com>"]
+authors = ["Mykyta Bobylyow <nbobylyov@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [{ include = "rotmd", from = "src" }]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-numpy = "^2.1.0"
+python = "^3.12"
+numpy = "^2.0.0"
 scipy = "^1.11"
-MDAnalysis = "^2.9.0"
+MDAnalysis = "^2.6.0"
 matplotlib = "^3.8"
 xarray = ">=2024.1"
 h5py = "^3.10"
-# JAX for GPU-accelerated computing (replaces numba)
-jax = {version = "^0.4.23", extras = ["cuda12_pip"]}
-optax = "^0.2.1"
+# Numba for CPU-optimized JIT compilation (default runtime)
+numba = "^0.62.0"
 click = "^8.1"
 rich = "^13.0"
 pydantic = "^2.5"
 pyyaml = "^6.0"
 tqdm = "^4.66"
+
+[tool.poetry.group.gpu]
+optional = true
+
+[tool.poetry.group.gpu.dependencies]
+# PyTorch for GPU acceleration (optional, for CUDA/HPC systems)
+torch = "^2.1.0"
 
 [tool.poetry.group.dev]
 optional = true

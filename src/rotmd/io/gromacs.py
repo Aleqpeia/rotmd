@@ -10,6 +10,7 @@ Key Features:
 - Automatic protein selection
 - Velocity/force detection
 - Memory-efficient chunked reading
+- Parallel batch computation via numba kernels
 
 Author: Mykyta Bobylyow
 Date: 2025
@@ -18,30 +19,33 @@ Date: 2025
 import numpy as np
 from typing import Dict, Optional, Tuple, List
 import warnings
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from rotmd.models.energy import TotalEnergy
-from rotmd.base import membrane_interface
-from rotmd.core.inertia import inertia_tensor
+from rotmd.core import kernels as K  # Parallel batch functions
 
 
 try:
     import MDAnalysis as mda
     from MDAnalysis.analysis import align
+
     HAS_MDANALYSIS = True
 except ImportError:
     HAS_MDANALYSIS = False
     warnings.warn("MDAnalysis not available. Install with: pip install MDAnalysis")
 
 
-def load_gromacs_trajectory(topology: str,
-                            trajectory: str,
-                            selection: str = "protein",
-                            start: int = 0,
-                            stop: Optional[int] = None,
-                            step: int = 1,
-                            align_to_first: bool = False,
-                            center: bool = True,
-                            verbose: bool = True) -> Dict:
+def load_gromacs_trajectory(
+    topology: str,
+    trajectory: str,
+    selection: str = "protein",
+    start: int = 0,
+    stop: Optional[int] = None,
+    step: int = 1,
+    align_to_first: bool = False,
+    center: bool = True,
+    verbose: bool = True,
+) -> Dict:
     """
     Load GROMACS trajectory for orientation analysis.
 
@@ -89,7 +93,6 @@ def load_gromacs_trajectory(topology: str,
     u = mda.Universe(topology, trajectory)
     atoms = u.select_atoms(selection)
 
- 
     if len(atoms) == 0:
         raise ValueError(f"Selection '{selection}' returned 0 atoms")
 
@@ -117,35 +120,31 @@ def load_gromacs_trajectory(topology: str,
         if verbose:
             print(f"  ✗ Forces NOT available")
 
-    # Load data
+    # ==========================================================================
+    # PHASE 1: Sequential data loading (MDAnalysis I/O limitation)
+    # ==========================================================================
     positions_list = []
     velocities_list = [] if has_velocities else None
     forces_list = [] if has_forces else None
     times_list = []
-    masses_list = []
-    inertia_list = []
-    energy_list = []
-    Epolar_list = []
-    Enonpol_list = []
-    per_residue_list = []
 
     n_frames = len(u.trajectory[start:stop:step])
     if verbose:
-        print(f"  Loading {n_frames} frames...")
+        print(f"  Phase 1: Loading {n_frames} frames (sequential I/O)...")
 
     # Reference for alignment
     ref_positions = None
+    masses = atoms.masses.copy()
 
     for ts in u.trajectory[start:stop:step]:
         if verbose and (ts.frame % max(1, n_frames // 10) == 0):
             print(f"    Frame {ts.frame}/{n_frames}")
 
         pos = atoms.positions.copy()
-        mass = atoms.masses.copy()
-        I = inertia_tensor(pos, mass)
+
         # Center at origin
         if center:
-            com = np.average(pos, weights=atoms.masses, axis=0)
+            com = np.average(pos, weights=masses, axis=0)
             pos -= com
 
         # Align to first frame
@@ -153,61 +152,311 @@ def load_gromacs_trajectory(topology: str,
             if ref_positions is None:
                 ref_positions = pos.copy()
             else:
-                # Rotation-only alignment
-                R = _rotation_matrix_align(pos, ref_positions, atoms.masses)
+                R = _rotation_matrix_align(pos, ref_positions, masses)
                 pos = pos @ R.T
-        energy = TotalEnergy().calculate(protein_atoms=atoms.copy(), 
-                                    membrane_center_z=membrane_interface.get_membrane_center_z(u.copy(), 
-                                    membrane_sel="resname CHL1", method='density'))
+
         positions_list.append(pos)
-        masses_list.append(mass)
-        energy_list.append(energy['total'])
-        Epolar_list.append(energy['electrostatic'])
-        Enonpol_list.append(energy['hydrophobic'])
-        per_residue_list.append(energy['per_residue'])
-        inertia_list.append(I)
+
         if has_velocities:
             velocities_list.append(atoms.velocities.copy())
 
         if has_forces:
             forces_list.append(atoms.forces.copy())
 
-        times_list.append(ts.time)  # Already in ps for GROMACS
+        times_list.append(ts.time)
+
+    # Convert to arrays
+    positions = np.array(positions_list)
+    times = np.array(times_list)
+    velocities = np.array(velocities_list) if has_velocities else None
+    forces = np.array(forces_list) if has_forces else None
 
     if verbose:
-        print(f"  ✓ Loaded {len(positions_list)} frames")
-        print(f"\nEnergy Summary (across trajectory):")
-        print(f"  Total Energy: {np.mean(energy_list):.2f} ± {np.std(energy_list):.2f} kcal/mol")
-        print(f"  Electrostatic: {np.mean(Epolar_list):.2f} ± {np.std(Epolar_list):.2f} kcal/mol")
-        print(f"  Hydrophobic: {np.mean(Enonpol_list)} ± {np.std(Enonpol_list):} kcal/mol")
+        print(f"  ✓ Loaded {n_frames} frames")
 
-    normal = membrane_interface.get_membrane_normal(u, membrane_sel="resname CHL1") 
-    # Convert to arrays
+    # ==========================================================================
+    # PHASE 2: Parallel batch computation (numba prange)
+    # ==========================================================================
+    if verbose:
+        print(f"  Phase 2: Computing observables (parallel)...")
+
+    # Compute COM for all frames in parallel
+    com_batch = K.compute_com_batch(positions, masses)
+
+    # Compute inertia tensors for all frames in parallel
+    inertia_batch = K.inertia_tensor_batch(positions, masses, com_batch)
+
+    if verbose:
+        print(f"  ✓ Computed inertia tensors ({n_frames} frames)")
+
+    # ==========================================================================
+    # Return structured data
+    # ==========================================================================
     data = {
-        'positions': np.array(positions_list),
-        'masses': atoms.masses.copy(),
-        'masses_list': np.array(masses_list),
-        'times': np.array(times_list),
-        'velocities': np.array(velocities_list) if has_velocities else None,
-        'forces': np.array(forces_list) if has_forces else None,
-        'inertia_tensor': np.array(inertia_list),
-        'normal': normal,
-        'has_velocities': has_velocities,
-        'has_forces': has_forces,
-        'n_frames': len(positions_list),
-        'n_atoms': len(atoms),
-        'Etot': np.array(energy_list),
-        'Epol': np.array(Epolar_list),
-        'Enonpol': np.array(Enonpol_list),
-        'per_residue': np.array(per_residue_list)
+        "positions": positions,
+        "masses": masses,
+        "times": times,
+        "velocities": velocities,
+        "forces": forces,
+        "com": com_batch,
+        "inertia_tensor": inertia_batch,
+        "has_velocities": has_velocities,
+        "has_forces": has_forces,
+        "n_frames": n_frames,
+        "n_atoms": len(atoms),
     }
 
     return data
 
 
-def _rotation_matrix_align(mobile: np.ndarray,
-                           target: np.ndarray,
-                           weights: np.ndarray) -> np.ndarray:
+def _compute_energy_chunk(args: Tuple) -> List[Dict]:
+    """
+    Worker function for parallel energy computation.
+
+    Each worker creates its own MDAnalysis Universe to avoid pickling issues.
+
+    Args:
+        args: Tuple of (topology, trajectory, selection, frame_indices, membrane_center_z)
+
+    Returns:
+        List of energy dicts for each frame in the chunk
+    """
+    topology, trajectory, selection, frame_indices, membrane_center_z = args
+
+    # Each worker creates its own Universe (can't pickle MDAnalysis objects)
+    import MDAnalysis as mda
+    from rotmd.models.energy import TotalEnergy
+
+    u = mda.Universe(topology, trajectory)
+    atoms = u.select_atoms(selection)
+    energy_calc = TotalEnergy()
+
+    results = []
+    for frame_idx in frame_indices:
+        u.trajectory[frame_idx]
+        energy = energy_calc.calculate(
+            protein_atoms=atoms, membrane_center_z=membrane_center_z
+        )
+        results.append(
+            {
+                "frame_idx": frame_idx,
+                "total": energy["total"],
+                "electrostatic": energy["electrostatic"],
+                "hydrophobic": energy["hydrophobic"],
+                "per_residue": energy["per_residue"],
+            }
+        )
+
+    return results
+
+
+def compute_trajectory_energies(
+    topology: str,
+    trajectory: str,
+    selection: str = "protein",
+    membrane_sel: str = "resname CHL1",
+    start: int = 0,
+    stop: Optional[int] = None,
+    step: int = 1,
+    n_workers: Optional[int] = None,
+    verbose: bool = True,
+) -> Dict:
+    """
+    Compute energies for trajectory frames with parallel processing.
+
+    This function is intentionally separate from load_gromacs_trajectory to allow
+    fast extraction without the energy computation bottleneck.
+
+    Parallelization: Uses ProcessPoolExecutor to distribute frame computation
+    across N CPU cores. Each worker creates its own MDAnalysis Universe.
+
+    Args:
+        topology: Topology file (.gro, .pdb, .tpr)
+        trajectory: Trajectory file (.xtc, .trr)
+        selection: MDAnalysis selection string for protein
+        membrane_sel: MDAnalysis selection string for membrane
+        start: First frame index
+        stop: Last frame index (None = all)
+        step: Frame step size
+        n_workers: Number of parallel workers (default: CPU count)
+        verbose: Print progress
+
+    Returns:
+        energies: Dictionary with:
+            - Etot: (n_frames,) total energy in kcal/mol
+            - Epol: (n_frames,) electrostatic energy
+            - Enonpol: (n_frames,) hydrophobic energy
+            - per_residue: (n_frames, n_residues) per-residue energies
+            - normal: (3,) membrane normal vector
+
+    Example:
+        >>> energies = compute_trajectory_energies('system.tpr', 'traj.trr', n_workers=8)
+    """
+    if not HAS_MDANALYSIS:
+        raise ImportError("MDAnalysis required")
+
+    from rotmd.base import membrane_interface
+
+    u = mda.Universe(topology, trajectory)
+
+    # Get frame indices
+    frame_indices = list(range(len(u.trajectory)))[start:stop:step]
+    n_frames = len(frame_indices)
+
+    if verbose:
+        print(f"Computing energies for {n_frames} frames...")
+
+    # Get membrane center once (assumes static membrane)
+    membrane_center_z = membrane_interface.get_membrane_center_z(
+        u, membrane_sel=membrane_sel, method="density"
+    )
+    normal = membrane_interface.get_membrane_normal(u, membrane_sel=membrane_sel)
+
+    # Determine number of workers
+    if n_workers is None:
+        n_workers = os.cpu_count() or 4
+    n_workers = min(n_workers, n_frames)  # Don't use more workers than frames
+
+    if verbose:
+        print(f"  Using {n_workers} parallel workers")
+
+    # Split frames into chunks for each worker
+    chunk_size = (n_frames + n_workers - 1) // n_workers
+    chunks = [frame_indices[i : i + chunk_size] for i in range(0, n_frames, chunk_size)]
+
+    # Prepare worker arguments
+    worker_args = [
+        (topology, trajectory, selection, chunk, membrane_center_z) for chunk in chunks
+    ]
+
+    # Parallel execution
+    all_results = []
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {
+            executor.submit(_compute_energy_chunk, args): i
+            for i, args in enumerate(worker_args)
+        }
+
+        completed = 0
+        for future in as_completed(futures):
+            chunk_results = future.result()
+            all_results.extend(chunk_results)
+            completed += 1
+            if verbose:
+                print(f"  Completed chunk {completed}/{len(chunks)}")
+
+    # Sort by frame index (parallel execution may complete out of order)
+    all_results.sort(key=lambda x: x["frame_idx"])
+
+    # Extract arrays
+    energy_list = [r["total"] for r in all_results]
+    Epolar_list = [r["electrostatic"] for r in all_results]
+    Enonpol_list = [r["hydrophobic"] for r in all_results]
+    per_residue_list = [r["per_residue"] for r in all_results]
+
+    if verbose:
+        print(f"✓ Computed energies")
+        print(f"\nEnergy Summary:")
+        print(
+            f"  Total: {np.mean(energy_list):.2f} ± {np.std(energy_list):.2f} kcal/mol"
+        )
+        print(
+            f"  Electrostatic: {np.mean(Epolar_list):.2f} ± {np.std(Epolar_list):.2f} kcal/mol"
+        )
+        print(
+            f"  Hydrophobic: {np.mean(Enonpol_list):.2f} ± {np.std(Enonpol_list):.2f} kcal/mol"
+        )
+
+    return {
+        "Etot": np.array(energy_list),
+        "Epol": np.array(Epolar_list),
+        "Enonpol": np.array(Enonpol_list),
+        "per_residue": np.array(per_residue_list),
+        "normal": normal,
+    }
+
+
+def load_gromacs_trajectory_chunked(
+    topology: str,
+    trajectory: str,
+    selection: str = "protein",
+    chunk_size: int = 1000,  # Process 1000 frames at a time
+    start: int = 0,
+    stop: Optional[int] = None,
+    step: int = 1,
+    verbose: bool = False,
+):
+    """
+    Load trajectory in chunks to avoid memory overflow.
+    Yields processed chunks instead of loading entire trajectory.
+    """
+    import MDAnalysis as mda
+    from tqdm import tqdm
+
+    u = mda.Universe(topology, trajectory)
+    protein = u.select_atoms(selection)
+    n_atoms = protein.n_atoms
+
+    # Determine frame range
+    total_frames = len(u.trajectory)
+    if stop is None:
+        stop = total_frames
+
+    frames_to_process = range(start, min(stop, total_frames), step)
+
+    # Process in chunks
+    chunk_positions = []
+    chunk_velocities = []
+    chunk_forces = []
+    chunk_times = []
+
+    for frame_idx in tqdm(frames_to_process, desc="Loading frames"):
+        u.trajectory[frame_idx]
+        ts = u.trajectory.ts
+
+        chunk_positions.append(protein.positions.copy())
+        chunk_velocities.append(
+            protein.velocities.copy()
+            if ts.has_velocities
+            else np.zeros_like(protein.positions)
+        )
+        chunk_forces.append(
+            protein.forces.copy() if ts.has_forces else np.zeros_like(protein.positions)
+        )
+        chunk_times.append(ts.time)
+
+        # Yield chunk when it reaches size limit
+        if len(chunk_positions) >= chunk_size:
+            yield {
+                "positions": np.array(chunk_positions),
+                "velocities": np.array(chunk_velocities),
+                "forces": np.array(chunk_forces),
+                "times": np.array(chunk_times),
+                "masses": protein.masses.copy(),
+                "n_atoms": n_atoms,
+            }
+
+            # Reset for next chunk
+            chunk_positions = []
+            chunk_velocities = []
+            chunk_forces = []
+            chunk_times = []
+
+    # Yield remaining frames
+    if chunk_positions:
+        yield {
+            "positions": np.array(chunk_positions),
+            "velocities": np.array(chunk_velocities),
+            "forces": np.array(chunk_forces),
+            "times": np.array(chunk_times),
+            "masses": protein.masses.copy(),
+            "n_atoms": n_atoms,
+        }
+
+
+def _rotation_matrix_align(
+    mobile: np.ndarray, target: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
     """
     Compute optimal rotation matrix to align mobile to target.
 
@@ -235,11 +484,13 @@ def _rotation_matrix_align(mobile: np.ndarray,
     return R
 
 
-def chunked_trajectory_reader(topology: str,
-                              trajectory: str,
-                              chunk_size: int = 1000,
-                              selection: str = "protein",
-                              **kwargs):
+def chunked_trajectory_reader(
+    topology: str,
+    trajectory: str,
+    chunk_size: int = 1000,
+    selection: str = "protein",
+    **kwargs,
+):
     """
     Generator for reading trajectory in chunks.
 
@@ -268,28 +519,30 @@ def chunked_trajectory_reader(topology: str,
     total_frames = len(u.trajectory)
 
     # Read in chunks
-    start = kwargs.get('start', 0)
-    stop = kwargs.get('stop', total_frames)
-    step = kwargs.get('step', 1)
+    start = kwargs.get("start", 0)
+    stop = kwargs.get("stop", total_frames)
+    step = kwargs.get("step", 1)
 
     for chunk_start in range(start, stop, chunk_size * step):
         chunk_stop = min(chunk_start + chunk_size * step, stop)
 
         chunk_data = load_gromacs_trajectory(
-            topology, trajectory,
+            topology,
+            trajectory,
             selection=selection,
             start=chunk_start,
             stop=chunk_stop,
             step=step,
             verbose=False,
-            **{k: v for k, v in kwargs.items() if k not in ['start', 'stop', 'step']}
+            **{k: v for k, v in kwargs.items() if k not in ["start", "stop", "step"]},
         )
 
         yield chunk_data
 
 
-def detect_trajectory_contents(trajectory: str,
-                               verbose: bool = True) -> Dict[str, bool]:
+def detect_trajectory_contents(
+    trajectory: str, verbose: bool = True
+) -> Dict[str, bool]:
     """
     Detect what data is available in trajectory file.
 
@@ -314,17 +567,17 @@ def detect_trajectory_contents(trajectory: str,
         raise ImportError("MDAnalysis required")
 
     # Detect format from extension
-    is_trr = trajectory.lower().endswith('.trr')
-    is_xtc = trajectory.lower().endswith('.xtc')
+    is_trr = trajectory.lower().endswith(".trr")
+    is_xtc = trajectory.lower().endswith(".xtc")
 
     # XTC files never have velocities/forces
     if is_xtc:
         contents = {
-            'has_positions': True,
-            'has_velocities': False,
-            'has_forces': False,
-            'is_trr': False,
-            'is_xtc': True
+            "has_positions": True,
+            "has_velocities": False,
+            "has_forces": False,
+            "is_trr": False,
+            "is_xtc": True,
         }
 
         if verbose:
@@ -345,15 +598,15 @@ def detect_trajectory_contents(trajectory: str,
         ts = u.trajectory[0]
 
         has_positions = True  # Always true if file loaded
-        has_velocities = hasattr(ts, 'has_velocities') and ts.has_velocities
-        has_forces = hasattr(ts, 'has_forces') and ts.has_forces
+        has_velocities = hasattr(ts, "has_velocities") and ts.has_velocities
+        has_forces = hasattr(ts, "has_forces") and ts.has_forces
 
         contents = {
-            'has_positions': has_positions,
-            'has_velocities': has_velocities,
-            'has_forces': has_forces,
-            'is_trr': is_trr,
-            'is_xtc': is_xtc
+            "has_positions": has_positions,
+            "has_velocities": has_velocities,
+            "has_forces": has_forces,
+            "is_trr": is_trr,
+            "is_xtc": is_xtc,
         }
 
         if verbose:
@@ -369,18 +622,17 @@ def detect_trajectory_contents(trajectory: str,
         if verbose:
             print(f"Error reading trajectory: {e}")
         return {
-            'has_positions': False,
-            'has_velocities': False,
-            'has_forces': False,
-            'is_trr': is_trr,
-            'is_xtc': is_xtc
+            "has_positions": False,
+            "has_velocities": False,
+            "has_forces": False,
+            "is_trr": is_trr,
+            "is_xtc": is_xtc,
         }
 
 
-def extract_frame(topology: str,
-                 trajectory: str,
-                 frame_idx: int,
-                 selection: str = "protein") -> Dict:
+def extract_frame(
+    topology: str, trajectory: str, frame_idx: int, selection: str = "protein"
+) -> Dict:
     """
     Extract single frame from trajectory.
 
@@ -406,38 +658,19 @@ def extract_frame(topology: str,
     ts = u.trajectory[frame_idx]
 
     frame_data = {
-        'positions': atoms.positions.copy(),
-        'masses': atoms.masses.copy(),
-        'time': ts.time
+        "positions": atoms.positions.copy(),
+        "masses": atoms.masses.copy(),
+        "time": ts.time,
     }
 
     try:
-        frame_data['velocities'] = atoms.velocities.copy()
+        frame_data["velocities"] = atoms.velocities.copy()
     except (AttributeError, mda.exceptions.NoDataError):
-        frame_data['velocities'] = None
+        frame_data["velocities"] = None
 
     try:
-        frame_data['forces'] = atoms.forces.copy()
+        frame_data["forces"] = atoms.forces.copy()
     except (AttributeError, mda.exceptions.NoDataError):
-        frame_data['forces'] = None
+        frame_data["forces"] = None
 
     return frame_data
-
-
-if __name__ == '__main__':
-    # Example usage
-    print("GROMACS I/O Module")
-    print("==================")
-    print()
-    print("Example usage:")
-    print()
-    print("from rotmd.io.gromacs import load_gromacs_trajectory, detect_trajectory_contents")
-    print()
-    print("# Check what's in trajectory")
-    print("contents = detect_trajectory_contents('traj.trr')")
-    print()
-    print("# Load trajectory")
-    print("data = load_gromacs_trajectory('system.gro', 'traj.trr')")
-    print()
-    print("print(f'Loaded {data[\"n_frames\"]} frames')")
-    print("print(f'Has velocities: {data[\"has_velocities\"]}')")

@@ -4,28 +4,37 @@ Pure PyTorch Computational Kernels for rotmd
 High-performance GPU-accelerated computational kernels using PyTorch.
 All functions are optimized for GPU and support automatic differentiation.
 
-This module replaces Numba with PyTorch, enabling 50-100x GPU speedup
-and autodiff capabilities. PyTorch is more commonly available on HPC
-clusters than JAX.
+This is an OPTIONAL runtime for GPU acceleration. For CPU-only systems,
+use numba_kernels.py (the default runtime).
 
 Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import torch
 import numpy as np
 from typing import Tuple, Callable, Optional
 
+try:
+    import torch
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    raise ImportError(
+        "PyTorch is not installed. Install with: pip install torch\n"
+        "For CPU-only mode, use numba_kernels instead (default runtime)."
+    )
+
 # Default to CPU, user can set device
-_default_device = torch.device('cpu')
+_default_device = torch.device("cpu")
 
 # =============================================================================
 # Vector Decomposition
 # =============================================================================
 
+
 def decompose_vector_single(
-    vector: torch.Tensor,  # (3,)
-    reference: torch.Tensor  # (3,)
+    vector: torch.Tensor, reference: torch.Tensor  # (3,)  # (3,)
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Decompose single vector into parallel and perpendicular components.
@@ -49,15 +58,14 @@ def decompose_vector_single(
 
 def decompose_vector_batch(
     vectors: torch.Tensor,  # (n_frames, 3)
-    reference_axes: torch.Tensor  # (n_frames, 3)
+    reference_axes: torch.Tensor,  # (n_frames, 3)
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Batch decomposition over frames."""
     return torch.vmap(decompose_vector_single)(vectors, reference_axes)
 
 
 def decompose_vector_batch_static_ref(
-    vectors: torch.Tensor,  # (n_frames, 3)
-    reference: torch.Tensor  # (3,)
+    vectors: torch.Tensor, reference: torch.Tensor  # (n_frames, 3)  # (3,)
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Batch decomposition with static reference."""
     ref_norm = torch.linalg.norm(reference)
@@ -73,6 +81,7 @@ def decompose_vector_batch_static_ref(
 # =============================================================================
 # Magnitude Computation
 # =============================================================================
+
 
 def compute_magnitude_batch(vectors: torch.Tensor) -> torch.Tensor:
     """
@@ -91,11 +100,12 @@ def compute_magnitude_batch(vectors: torch.Tensor) -> torch.Tensor:
 # Angular Momentum & Torque
 # =============================================================================
 
+
 def cross_product_single_frame(
     positions: torch.Tensor,  # (n_atoms, 3)
-    vectors: torch.Tensor,     # (n_atoms, 3)
-    masses: torch.Tensor,      # (n_atoms,)
-    com: torch.Tensor          # (3,)
+    vectors: torch.Tensor,  # (n_atoms, 3)
+    masses: torch.Tensor,  # (n_atoms,)
+    com: torch.Tensor,  # (3,)
 ) -> torch.Tensor:
     """
     Compute Σ m_i (r_i - COM) × v_i for single frame.
@@ -118,21 +128,21 @@ def cross_product_trajectory(
     positions: torch.Tensor,
     vectors: torch.Tensor,
     masses: torch.Tensor,
-    com: torch.Tensor
+    com: torch.Tensor,
 ) -> torch.Tensor:
     """Batch cross products over trajectory."""
-    return torch.vmap(
-        lambda p, v, c: cross_product_single_frame(p, v, masses, c)
-    )(positions, vectors, com)
+    return torch.vmap(lambda p, v, c: cross_product_single_frame(p, v, masses, c))(
+        positions, vectors, com
+    )
 
 
 # =============================================================================
 # Center of Mass
 # =============================================================================
 
+
 def compute_com_single(
-    positions: torch.Tensor,  # (n_atoms, 3)
-    masses: torch.Tensor      # (n_atoms,)
+    positions: torch.Tensor, masses: torch.Tensor  # (n_atoms, 3)  # (n_atoms,)
 ) -> torch.Tensor:
     """Compute center of mass for single frame."""
     total_mass = torch.sum(masses)
@@ -141,7 +151,7 @@ def compute_com_single(
 
 def compute_com_batch(
     positions: torch.Tensor,  # (n_frames, n_atoms, 3)
-    masses: torch.Tensor      # (n_atoms,)
+    masses: torch.Tensor,  # (n_atoms,)
 ) -> torch.Tensor:
     """Batch COM computation."""
     return torch.vmap(lambda p: compute_com_single(p, masses))(positions)
@@ -151,20 +161,18 @@ def compute_com_batch(
 # Inertia Tensors
 # =============================================================================
 
+
 def inertia_tensor_single(
-    positions: torch.Tensor,
-    masses: torch.Tensor,
-    com: torch.Tensor
+    positions: torch.Tensor, masses: torch.Tensor, com: torch.Tensor
 ) -> torch.Tensor:
     """Compute inertia tensor for single frame."""
     r = positions - com
     r_squared = torch.sum(r**2, dim=1)
 
     # Diagonal elements
-    I_diag = torch.stack([
-        torch.sum(masses * (r_squared - r[:, i]**2))
-        for i in range(3)
-    ])
+    I_diag = torch.stack(
+        [torch.sum(masses * (r_squared - r[:, i] ** 2)) for i in range(3)]
+    )
 
     # Off-diagonal elements
     I_01 = -torch.sum(masses * r[:, 0] * r[:, 1])
@@ -182,18 +190,14 @@ def inertia_tensor_single(
 
 
 def inertia_tensor_batch(
-    positions: torch.Tensor,
-    masses: torch.Tensor,
-    com: torch.Tensor
+    positions: torch.Tensor, masses: torch.Tensor, com: torch.Tensor
 ) -> torch.Tensor:
     """Batch inertia tensor computation."""
-    return torch.vmap(
-        lambda p, c: inertia_tensor_single(p, masses, c)
-    )(positions, com)
+    return torch.vmap(lambda p, c: inertia_tensor_single(p, masses, c))(positions, com)
 
 
 def principal_axes_batch(
-    inertia_tensors: torch.Tensor
+    inertia_tensors: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute principal axes for batch of inertia tensors."""
     # PyTorch eigh returns (eigenvalues, eigenvectors)
@@ -205,10 +209,9 @@ def principal_axes_batch(
     # Gather sorted eigenvalues and eigenvectors
     moments = torch.gather(eigenvalues, -1, indices)
     # For eigenvectors, need to reorder columns
-    axes = torch.stack([
-        eigenvectors[..., indices[i]]
-        for i in range(inertia_tensors.shape[0])
-    ])
+    axes = torch.stack(
+        [eigenvectors[..., indices[i]] for i in range(inertia_tensors.shape[0])]
+    )
 
     return moments, axes
 
@@ -217,9 +220,9 @@ def principal_axes_batch(
 # Linear Algebra
 # =============================================================================
 
+
 def solve_linear_batch(
-    A: torch.Tensor,  # (n_frames, n, n)
-    b: torch.Tensor   # (n_frames, n)
+    A: torch.Tensor, b: torch.Tensor  # (n_frames, n, n)  # (n_frames, n)
 ) -> torch.Tensor:
     """Solve A @ x = b for batch of linear systems."""
     return torch.linalg.solve(A, b)
@@ -229,10 +232,8 @@ def solve_linear_batch(
 # Time Derivatives
 # =============================================================================
 
-def time_derivative_batch(
-    data: torch.Tensor,
-    times: torch.Tensor
-) -> torch.Tensor:
+
+def time_derivative_batch(data: torch.Tensor, times: torch.Tensor) -> torch.Tensor:
     """Compute time derivative using finite differences."""
     # Central differences
     dt = times[1:] - times[:-1]
@@ -251,6 +252,7 @@ def time_derivative_batch(
 # Conversion Utilities
 # =============================================================================
 
+
 def to_torch(array: np.ndarray, device: Optional[torch.device] = None) -> torch.Tensor:
     """Convert NumPy array to PyTorch tensor."""
     if device is None:
@@ -267,7 +269,8 @@ def to_numpy(tensor: torch.Tensor) -> np.ndarray:
 # Device Management
 # =============================================================================
 
-def set_device(device: str = 'cpu'):
+
+def set_device(device: str = "cpu"):
     """
     Set default PyTorch device.
 
@@ -275,22 +278,22 @@ def set_device(device: str = 'cpu'):
         device: 'cpu', 'cuda', or 'cuda:0', 'cuda:1', etc.
     """
     global _default_device
-    if device.startswith('cuda'):
+    if device.startswith("cuda"):
         if torch.cuda.is_available():
             _default_device = torch.device(device)
         else:
             print(f"Warning: CUDA not available, using CPU")
-            _default_device = torch.device('cpu')
+            _default_device = torch.device("cpu")
     else:
         _default_device = torch.device(device)
 
 
 def get_devices():
     """Get available PyTorch devices."""
-    devices = [torch.device('cpu')]
+    devices = [torch.device("cpu")]
     if torch.cuda.is_available():
         for i in range(torch.cuda.device_count()):
-            devices.append(torch.device(f'cuda:{i}'))
+            devices.append(torch.device(f"cuda:{i}"))
     return devices
 
 
@@ -303,11 +306,12 @@ def get_device():
 # Autodiff Functions
 # =============================================================================
 
+
 def angular_momentum_wrt_positions(
     positions: torch.Tensor,
     velocities: torch.Tensor,
     masses: torch.Tensor,
-    com: torch.Tensor
+    com: torch.Tensor,
 ) -> torch.Tensor:
     """Angular momentum with autodiff support."""
     positions.requires_grad_(True)
@@ -315,9 +319,7 @@ def angular_momentum_wrt_positions(
 
 
 def torque_from_energy_gradient(
-    theta: float,
-    psi: float,
-    energy_func: Callable
+    theta: float, psi: float, energy_func: Callable
 ) -> Tuple[float, float]:
     """Compute torque from energy using autodiff."""
     theta_t = torch.tensor(theta, requires_grad=True)
@@ -333,18 +335,16 @@ def torque_from_energy_gradient(
 # Batching for Large Trajectories
 # =============================================================================
 
+
 def process_in_chunks(
-    func: Callable,
-    data: torch.Tensor,
-    chunk_size: int = 1000,
-    **kwargs
+    func: Callable, data: torch.Tensor, chunk_size: int = 1000, **kwargs
 ) -> torch.Tensor:
     """Process large trajectory in chunks."""
     n_frames = data.shape[0]
     chunks = []
 
     for i in range(0, n_frames, chunk_size):
-        chunk_data = data[i:i+chunk_size]
+        chunk_data = data[i : i + chunk_size]
         chunk_result = func(chunk_data, **kwargs)
         chunks.append(chunk_result)
 
@@ -357,37 +357,31 @@ def process_in_chunks(
 
 __all__ = [
     # Vector operations
-    'decompose_vector_single',
-    'decompose_vector_batch',
-    'decompose_vector_batch_static_ref',
-    'compute_magnitude_batch',
-
+    "decompose_vector_single",
+    "decompose_vector_batch",
+    "decompose_vector_batch_static_ref",
+    "compute_magnitude_batch",
     # Angular momentum & torque
-    'cross_product_single_frame',
-    'cross_product_trajectory',
-    'compute_com_single',
-    'compute_com_batch',
-
+    "cross_product_single_frame",
+    "cross_product_trajectory",
+    "compute_com_single",
+    "compute_com_batch",
     # Inertia tensors
-    'inertia_tensor_single',
-    'inertia_tensor_batch',
-    'principal_axes_batch',
-
+    "inertia_tensor_single",
+    "inertia_tensor_batch",
+    "principal_axes_batch",
     # Linear algebra
-    'solve_linear_batch',
-
+    "solve_linear_batch",
     # Time derivatives
-    'time_derivative_batch',
-
+    "time_derivative_batch",
     # Utilities
-    'to_torch',
-    'to_numpy',
-    'set_device',
-    'get_devices',
-    'get_device',
-    'process_in_chunks',
-
+    "to_torch",
+    "to_numpy",
+    "set_device",
+    "get_devices",
+    "get_device",
+    "process_in_chunks",
     # Autodiff
-    'angular_momentum_wrt_positions',
-    'torque_from_energy_gradient',
+    "angular_momentum_wrt_positions",
+    "torque_from_energy_gradient",
 ]

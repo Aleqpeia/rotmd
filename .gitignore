@@ -41,6 +41,7 @@ flake.lock
 presentation_template.tex
 presentation.pdf
 REFACTORING_SUMMARY.md
+IMPLEMENTATION_SUMMARY.md
 presentation/appendix.tex
 presentation/beamerthemeoxfordmaths.sty
 presentation/bogomoletz-logo.png

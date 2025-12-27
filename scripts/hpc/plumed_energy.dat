@@ -1,0 +1,128 @@
+# =============================================================================
+# PLUMED Energy Collective Variables
+# SASA (hydrophobic) and Electrostatic interactions for membrane proteins
+# =============================================================================
+
+MOLINFO STRUCTURE=reference.pdb
+
+# -----------------------------------------------------------------------------
+# Atom Groups
+# -----------------------------------------------------------------------------
+
+# Full protein
+protein: GROUP ATOMS=1-3082
+
+# Hydrophobic residues (Kyte-Doolittle > 0)
+hydrophobic: GROUP ATOMS={@sidechain-ILE,@sidechain-LEU,@sidechain-VAL,@sidechain-ALA,@sidechain-MET,@sidechain-PHE,@sidechain-TRP,@sidechain-CYS}
+
+# Charged residues
+positive: GROUP ATOMS={@sidechain-LYS,@sidechain-ARG}
+negative: GROUP ATOMS={@sidechain-ASP,@sidechain-GLU}
+charged: GROUP ATOMS={@sidechain-LYS,@sidechain-ARG,@sidechain-ASP,@sidechain-GLU}
+
+# Membrane headgroups (adjust atom names to your force field)
+# CHARMM: PO4, NH3; AMBER: P, N
+membrane_phosphate: GROUP ATOMS={@PO4}
+membrane_choline: GROUP ATOMS={@NC3,@NH3}
+
+# -----------------------------------------------------------------------------
+# CV1: Total SASA (hydrophobic driving force)
+# -----------------------------------------------------------------------------
+
+# Total protein SASA - LCPO algorithm (fast analytical approximation)
+sasa_total: SASA_LCPO TYPE=TOTAL ATOMS=protein NL_STRIDE=20
+
+# Hydrophobic SASA only
+sasa_hydrophobic: SASA_LCPO TYPE=TOTAL ATOMS=hydrophobic NL_STRIDE=20
+
+# Hydrophilic SASA (charged + polar)
+sasa_charged: SASA_LCPO TYPE=TOTAL ATOMS=charged NL_STRIDE=20
+
+# Burial ratio: fraction of hydrophobic surface buried
+# Lower = more buried = stronger hydrophobic anchoring
+burial_ratio: MATHEVAL ARG=sasa_hydrophobic,sasa_total FUNC=x/y PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# CV2: Electrostatic Contacts (membrane interaction)
+# -----------------------------------------------------------------------------
+
+# Coordination: protein charged ↔ membrane phosphate
+# High coordination = strong electrostatic interaction
+coord_pos_po4: COORDINATION GROUPA=positive GROUPB=membrane_phosphate R_0=0.6 NN=6 MM=12
+coord_neg_po4: COORDINATION GROUPA=negative GROUPB=membrane_phosphate R_0=0.6 NN=6 MM=12
+
+# Net electrostatic coordination (cation-anion asymmetry)
+# Positive = cation-dominated, Negative = anion-dominated
+elec_asymmetry: MATHEVAL ARG=coord_pos_po4,coord_neg_po4 FUNC=x-y PERIODIC=NO
+
+# Total electrostatic contacts
+elec_total: MATHEVAL ARG=coord_pos_po4,coord_neg_po4 FUNC=x+y PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# CV3: Insertion Depth (z-position relative to membrane)
+# -----------------------------------------------------------------------------
+
+com: COM ATOMS=protein
+com_z: COMBINE ARG=com.z COEFFICIENTS=0.1 PERIODIC=NO  # nm
+
+# Charged residues COM - tracks electrostatic center
+charged_com: COM ATOMS=charged
+charged_z: COMBINE ARG=charged_com.z COEFFICIENTS=0.1 PERIODIC=NO
+
+# Hydrophobic COM - tracks hydrophobic anchor
+hydrophobic_com: COM ATOMS=hydrophobic
+hydrophobic_z: COMBINE ARG=hydrophobic_com.z COEFFICIENTS=0.1 PERIODIC=NO
+
+# Vertical separation: hydrophobic vs charged centers
+# Positive = hydrophobic deeper (WT-like)
+# Negative = charged deeper (N75K-like)
+vertical_sep: MATHEVAL ARG=hydrophobic_z,charged_z FUNC=y-x PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# CV4: Per-residue contacts (for mutation analysis like N75K)
+# -----------------------------------------------------------------------------
+
+# Example: Track specific residue (e.g., residue 75)
+# res75: GROUP ATOMS=@sidechain-75
+# coord_res75: COORDINATION GROUPA=res75 GROUPB=membrane_phosphate R_0=0.6
+
+# -----------------------------------------------------------------------------
+# Energy-like CVs (proxies)
+# -----------------------------------------------------------------------------
+
+# Hydrophobic "energy" proxy: -SASA_hydrophobic (more burial = lower energy)
+E_hydrophobic: MATHEVAL ARG=sasa_hydrophobic FUNC=-0.01*x PERIODIC=NO  # Scale factor
+
+# Electrostatic "energy" proxy: -coordination (more contacts = lower energy)
+E_electrostatic: MATHEVAL ARG=elec_total FUNC=-0.5*x PERIODIC=NO  # Scale factor
+
+# Total energy proxy
+E_total: MATHEVAL ARG=E_hydrophobic,E_electrostatic FUNC=x+y PERIODIC=NO
+
+# -----------------------------------------------------------------------------
+# Optional: Metadynamics on energy CVs
+# -----------------------------------------------------------------------------
+
+# Uncomment to bias SASA and electrostatic contacts:
+# metad_energy: METAD ...
+#   ARG=sasa_hydrophobic,elec_total
+#   SIGMA=5.0,1.0
+#   HEIGHT=1.0
+#   PACE=500
+#   BIASFACTOR=15
+#   TEMP=310
+#   GRID_MIN=0,0
+#   GRID_MAX=200,50
+#   FILE=HILLS_energy
+# ...
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+
+PRINT ARG=sasa_total,sasa_hydrophobic,sasa_charged,burial_ratio STRIDE=100 FILE=COLVAR_SASA
+PRINT ARG=coord_pos_po4,coord_neg_po4,elec_total,elec_asymmetry STRIDE=100 FILE=COLVAR_ELEC
+PRINT ARG=com_z,charged_z,hydrophobic_z,vertical_sep STRIDE=100 FILE=COLVAR_DEPTH
+PRINT ARG=E_hydrophobic,E_electrostatic,E_total STRIDE=100 FILE=COLVAR_ENERGY
+
+FLUSH STRIDE=1000

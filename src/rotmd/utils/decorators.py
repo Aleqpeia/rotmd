@@ -17,18 +17,20 @@ import numpy as np
 from functools import wraps
 from typing import Callable, TypeVar, Any, Optional
 
-T = TypeVar('T')
-U = TypeVar('U')
+T = TypeVar("T")
+U = TypeVar("U")
 
 
 # =============================================================================
 # JAX Import Handling
 # =============================================================================
 
+
 def _has_jax() -> bool:
     """Check if JAX is available."""
     try:
         import jax
+
         return True
     except ImportError:
         return False
@@ -38,6 +40,7 @@ def _get_jax():
     """Get JAX module if available."""
     if _has_jax():
         import jax
+
         return jax
     return None
 
@@ -45,6 +48,7 @@ def _get_jax():
 # =============================================================================
 # Trajectory Vectorization Decorator
 # =============================================================================
+
 
 def trajectory(frame_axis: int = 0, use_jax: bool = True):
     """
@@ -84,25 +88,31 @@ def trajectory(frame_axis: int = 0, use_jax: bool = True):
         - Falls back to NumPy if JAX not available
         - Function should work on single frame (frame_axis dimension removed)
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
             if use_jax and _has_jax():
                 # JAX path: use vmap for automatic vectorization
                 from jax import vmap, jit
-                from rotmd.core import torch_kernels as tk
+
+                import jax.numpy as jnp
 
                 # Convert inputs to JAX arrays
-                jax_args = [tkto_jax(arg) if isinstance(arg, np.ndarray) else arg
-                           for arg in args]
-                jax_kwargs = {k: tkto_jax(v) if isinstance(v, np.ndarray) else v
-                             for k, v in kwargs.items()}
+                jax_args = [
+                    jnp.asarray(arg) if isinstance(arg, np.ndarray) else arg
+                    for arg in args
+                ]
+                jax_kwargs = {
+                    k: jnp.asarray(v) if isinstance(v, np.ndarray) else v
+                    for k, v in kwargs.items()
+                }
 
                 # Create vmapped function
                 # Determine which arguments to vmap over
                 in_axes = []
                 for i, arg in enumerate(jax_args):
-                    if hasattr(arg, 'shape') and len(arg.shape) > 0:
+                    if hasattr(arg, "shape") and len(arg.shape) > 0:
                         # Assume first axis is frame axis for array arguments
                         in_axes.append(frame_axis)
                     else:
@@ -114,16 +124,18 @@ def trajectory(frame_axis: int = 0, use_jax: bool = True):
                 result_jax = vmapped_func(*jax_args, **jax_kwargs)
 
                 # Convert back to NumPy
-                return tkto_numpy(result_jax)
+                return np.array(result_jax)
 
             else:
                 # NumPy fallback: manual loop
                 # Assume first argument contains trajectory
                 if len(args) == 0:
-                    raise ValueError("trajectory decorator requires at least one argument")
+                    raise ValueError(
+                        "trajectory decorator requires at least one argument"
+                    )
 
                 first_arg = args[0]
-                if not hasattr(first_arg, 'shape'):
+                if not hasattr(first_arg, "shape"):
                     raise ValueError("First argument must be array-like")
 
                 n_frames = first_arg.shape[frame_axis]
@@ -133,7 +145,7 @@ def trajectory(frame_axis: int = 0, use_jax: bool = True):
                     # Extract frame from each argument
                     frame_args = []
                     for arg in args:
-                        if hasattr(arg, 'shape') and len(arg.shape) > frame_axis:
+                        if hasattr(arg, "shape") and len(arg.shape) > frame_axis:
                             frame_args.append(np.take(arg, i, axis=frame_axis))
                         else:
                             frame_args.append(arg)
@@ -146,12 +158,14 @@ def trajectory(frame_axis: int = 0, use_jax: bool = True):
                 return np.array(results)
 
         return wrapper
+
     return decorator
 
 
 # =============================================================================
 # JAX JIT Compilation Decorator
 # =============================================================================
+
 
 def jax_jit(func: Optional[Callable] = None, *, static_argnums: Optional[tuple] = None):
     """
@@ -179,9 +193,11 @@ def jax_jit(func: Optional[Callable] = None, *, static_argnums: Optional[tuple] 
         - Subsequent calls are 10-100x faster
         - Falls back gracefully if JAX not available
     """
+
     def decorator(f: Callable) -> Callable:
         if _has_jax():
             from jax import jit
+
             return jit(f, static_argnums=static_argnums)
         else:
             # No JAX: return original function
@@ -198,6 +214,7 @@ def jax_jit(func: Optional[Callable] = None, *, static_argnums: Optional[tuple] 
 # =============================================================================
 # Array Conversion Decorators
 # =============================================================================
+
 
 def ensure_jax(func: Callable) -> Callable:
     """
@@ -222,29 +239,32 @@ def ensure_jax(func: Callable) -> Callable:
         >>> print(type(result))
         <class 'numpy.ndarray'>
     """
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         if not _has_jax():
             # No JAX: just call function (may fail)
             return func(*args, **kwargs)
 
-        from rotmd.core import jax_kernels as jk
+        import jax.numpy as jnp
 
         # Convert NumPy → JAX
-        jax_args = [tkto_jax(arg) if isinstance(arg, np.ndarray) else arg
-                   for arg in args]
-        jax_kwargs = {k: tkto_jax(v) if isinstance(v, np.ndarray) else v
-                     for k, v in kwargs.items()}
+        jax_args = [
+            jnp.asarray(arg) if isinstance(arg, np.ndarray) else arg for arg in args
+        ]
+        jax_kwargs = {
+            k: jnp.asarray(v) if isinstance(v, np.ndarray) else v
+            for k, v in kwargs.items()
+        }
 
         # Call function
         result = func(*jax_args, **jax_kwargs)
 
         # Convert JAX → NumPy
-        if hasattr(result, '__array__'):
-            return tkto_numpy(result)
+        if hasattr(result, "__array__"):
+            return np.array(result)
         elif isinstance(result, tuple):
-            return tuple(tkto_numpy(r) if hasattr(r, '__array__') else r
-                        for r in result)
+            return tuple(np.array(r) if hasattr(r, "__array__") else r for r in result)
         else:
             return result
 
@@ -254,6 +274,7 @@ def ensure_jax(func: Callable) -> Callable:
 # =============================================================================
 # Performance Timing Decorator
 # =============================================================================
+
 
 def benchmark(func: Callable) -> Callable:
     """
@@ -276,14 +297,17 @@ def benchmark(func: Callable) -> Callable:
         >>> result = slow_computation(1000000)
         [slow_computation] Execution time: 0.123s
     """
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         import time
+
         start = time.time()
         result = func(*args, **kwargs)
         elapsed = time.time() - start
         print(f"[{func.__name__}] Execution time: {elapsed:.3f}s")
         return result
+
     return wrapper
 
 
@@ -291,7 +315,8 @@ def benchmark(func: Callable) -> Callable:
 # Device Management Decorator
 # =============================================================================
 
-def on_device(device: str = 'gpu'):
+
+def on_device(device: str = "gpu"):
     """
     Decorator to run function on specific JAX device.
 
@@ -309,22 +334,28 @@ def on_device(device: str = 'gpu'):
         >>> # Runs on GPU if available
         >>> result = gpu_computation(jnp.ones(10000))
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
             if _has_jax():
-                from rotmd.core import jax_kernels as jk
-                # Set device
-                tkset_device(device)
+                import jax
+
+                # Set device for JAX
+                # Note: JAX device management is different, this is simplified
+                pass
 
             return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
 # =============================================================================
 # Batching Decorator
 # =============================================================================
+
 
 def batch_process(chunk_size: int = 1000):
     """
@@ -348,6 +379,7 @@ def batch_process(chunk_size: int = 1000):
         >>> large_traj = np.random.rand(50000, 100, 3)
         >>> energies = process_trajectory(large_traj)
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -355,7 +387,7 @@ def batch_process(chunk_size: int = 1000):
                 return func(*args, **kwargs)
 
             first_arg = args[0]
-            if not hasattr(first_arg, 'shape'):
+            if not hasattr(first_arg, "shape"):
                 return func(*args, **kwargs)
 
             n_frames = first_arg.shape[0]
@@ -370,8 +402,8 @@ def batch_process(chunk_size: int = 1000):
                 # Extract chunk from each argument
                 chunk_args = []
                 for arg in args:
-                    if hasattr(arg, 'shape') and arg.shape[0] == n_frames:
-                        chunk_args.append(arg[i:i+chunk_size])
+                    if hasattr(arg, "shape") and arg.shape[0] == n_frames:
+                        chunk_args.append(arg[i : i + chunk_size])
                     else:
                         chunk_args.append(arg)
 
@@ -383,6 +415,7 @@ def batch_process(chunk_size: int = 1000):
             return np.concatenate(results, axis=0)
 
         return wrapper
+
     return decorator
 
 
@@ -391,10 +424,10 @@ def batch_process(chunk_size: int = 1000):
 # =============================================================================
 
 __all__ = [
-    'trajectory',
-    'jax_jit',
-    'ensure_jax',
-    'benchmark',
-    'on_device',
-    'batch_process',
+    "trajectory",
+    "jax_jit",
+    "ensure_jax",
+    "benchmark",
+    "on_device",
+    "batch_process",
 ]

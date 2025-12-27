@@ -25,8 +25,8 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-__version__ = '0.1.0'
-__author__ = 'Mykyta Bobylyow'
+__version__ = "0.1.0"
+__author__ = "Mykyta Bobylyow"
 
 import numpy as np
 
@@ -40,7 +40,7 @@ from .core.orientation import (
     rotation_matrix_to_quaternion,
     quaternion_to_rotation_matrix,
     compute_angular_displacement,
-    unwrap_euler_angles
+    unwrap_euler_angles,
 )
 
 # Observables
@@ -62,46 +62,36 @@ from .observables.unified import compute_all_observables
 from .observables.diffusion import (
     mean_squared_angular_displacement,
     extract_diffusion_coefficient,
-    analyze_diffusion
+    analyze_diffusion,
 )
 
 # Analysis
-from .analysis.correlations import (
-    autocorrelation_function,
-    cross_correlation_function
-)
-from .analysis.friction import (
-    extract_friction_from_acf,
-    orientation_dependent_friction 
-)
+from .analysis.correlations import autocorrelation_function, cross_correlation_function
+from .analysis.friction import extract_friction_from_acf, orientation_dependent_friction
 from .analysis.pmf import (
     compute_pmf_1d,
     compute_pmf_2d,
     jacobian_euler_angles,
-    free_energy_difference 
+    free_energy_difference,
 )
 
 # Models
-from .models.langevin import (
-    LangevinIntegrator,
-    AnisotropicLangevin
-)
-from .models.energy import (
-    ElectrostaticEnergy,
-    TotalEnergy,
-    HydrophobicEnergy
-)
+from .models.langevin import LangevinIntegrator, AnisotropicLangevin
+from .models.energy import ElectrostaticEnergy, TotalEnergy, HydrophobicEnergy
 
 # I/O
-from .io.gromacs import (
-    load_gromacs_trajectory,
-    detect_trajectory_contents
-)
+from .io.gromacs import load_gromacs_trajectory, detect_trajectory_contents
 from .io.output import (
     save_results_json,
     load_results_json,
     save_results_npz,
-    load_results_npz
+    load_results_npz,
+)
+from .io.plumed import (
+    generate_plumed_input,
+    read_colvar_file,
+    PlumedConfig,
+    PlumedWriter,
 )
 
 # Configuration
@@ -112,18 +102,20 @@ from .utils import (
     bootstrap_confidence_interval,
     block_average,
     circular_mean,
-    circular_std
+    circular_std,
 )
 
 
 # High-level API function
-def analyze_trajectory(topology: str,
-                      trajectory: str,
-                      selection: str = 'protein',
-                      output_dir: str = 'analysis_results',
-                      temperature: float = 300.0,
-                      verbose: bool = True,
-                      save_plots: bool = False):
+def analyze_trajectory(
+    topology: str,
+    trajectory: str,
+    selection: str = "protein",
+    output_dir: str = "analysis_results",
+    temperature: float = 300.0,
+    verbose: bool = True,
+    save_plots: bool = False,
+):
     """
     High-level function to perform complete orientation analysis.
 
@@ -172,9 +164,7 @@ def analyze_trajectory(topology: str,
         print("\n[1/4] Loading trajectory...")
 
     traj_data = load_gromacs_trajectory(
-        topology, trajectory,
-        selection=selection,
-        verbose=verbose
+        topology, trajectory, selection=selection, verbose=verbose
     )
 
     # Step 2: Extract Euler angles
@@ -182,8 +172,7 @@ def analyze_trajectory(topology: str,
         print("\n[2/4] Extracting Euler angles...")
 
     euler_angles = extract_orientation_trajectory(
-        traj_data['positions'],
-        traj_data['masses']
+        traj_data["positions"], traj_data["masses"]
     )
 
     if verbose:
@@ -200,53 +189,50 @@ def analyze_trajectory(topology: str,
     print(max(theta_deg), max(psi_deg))
 
     pmf_result = compute_pmf_2d(
-        theta_deg,
-        psi_deg,
-        theta_bins=18,
-        psi_bins=36,
-        temperature=temperature
+        theta_deg, psi_deg, theta_bins=18, psi_bins=36, temperature=temperature
     )
 
-    pmf = pmf_result['pmf']
-    theta_bins = pmf_result['theta_centers']
-    psi_bins = pmf_result['psi_centers']
+    pmf = pmf_result["pmf"]
+    theta_bins = pmf_result["theta_centers"]
+    psi_bins = pmf_result["psi_centers"]
 
     # Step 4: Analyze diffusion
     if verbose:
         print("\n[4/4] Analyzing diffusion...")
 
     diffusion_results = analyze_diffusion(
-        euler_angles,
-        traj_data['times'],
-        verbose=verbose
+        euler_angles, traj_data["times"], verbose=verbose
     )
 
     # Compile results
     results = {
-        'n_frames': len(euler_angles),
-        'euler_angles': euler_angles,
-        'times': traj_data['times'],
-        'theta_mean': np.mean(euler_angles[:, 1]),
-        'theta_std': np.std(euler_angles[:, 1]),
-        'pmf': pmf,
-        'theta_bins': theta_bins,
-        'psi_bins': psi_bins,
-        **diffusion_results
+        "n_frames": len(euler_angles),
+        "euler_angles": euler_angles,
+        "times": traj_data["times"],
+        "theta_mean": np.mean(euler_angles[:, 1]),
+        "theta_std": np.std(euler_angles[:, 1]),
+        "pmf": pmf,
+        "theta_bins": theta_bins,
+        "psi_bins": psi_bins,
+        **diffusion_results,
     }
 
     # Save results
-    save_results_npz({
-        'euler': euler_angles,
-        'times': traj_data['times'],
-        'pmf': pmf,
-        'theta_bins': theta_bins,
-        'psi_bins': psi_bins
-    }, str(out_path / 'trajectory_data.npz'))
+    save_results_npz(
+        {
+            "euler": euler_angles,
+            "times": traj_data["times"],
+            "pmf": pmf,
+            "theta_bins": theta_bins,
+            "psi_bins": psi_bins,
+        },
+        str(out_path / "trajectory_data.npz"),
+    )
 
-    save_results_json({
-        k: v for k, v in results.items()
-        if not isinstance(v, np.ndarray)
-    }, str(out_path / 'results.json'))
+    save_results_json(
+        {k: v for k, v in results.items() if not isinstance(v, np.ndarray)},
+        str(out_path / "results.json"),
+    )
 
     if verbose:
         print(f"\n✓ Results saved to {output_dir}/")
@@ -260,19 +246,20 @@ def analyze_trajectory(topology: str,
             if verbose:
                 print("\nGenerating plots...")
 
-            plots_dir = out_path / 'plots'
+            plots_dir = out_path / "plots"
             plots_dir.mkdir(exist_ok=True)
 
             # PMF
-            plot_pmf_heatmap(pmf, theta_bins, psi_bins,
-                           save_path=str(plots_dir / 'pmf.png'))
+            plot_pmf_heatmap(
+                pmf, theta_bins, psi_bins, save_path=str(plots_dir / "pmf.png")
+            )
 
             # Trajectory
             plot_trajectory_with_states(
                 euler_angles[:, 1],  # theta
-                traj_data['times'],
-                ylabel='θ (rad)',
-                save_path=str(plots_dir / 'theta_trajectory.png')
+                traj_data["times"],
+                ylabel="θ (rad)",
+                save_path=str(plots_dir / "theta_trajectory.png"),
             )
 
             if verbose:
@@ -292,70 +279,66 @@ def analyze_trajectory(topology: str,
 
 __all__ = [
     # Version
-    '__version__',
-    '__author__',
-
+    "__version__",
+    "__author__",
     # High-level API
-    'analyze_trajectory',
-
+    "analyze_trajectory",
     # Core
-    'TrajectoryData',
-    'load_trajectory',
-    'validate_trajectory',
-    'inertia_tensor',
-    'principal_axes',
-    'extract_orientation_trajectory',
-    'rotation_matrix_to_euler_zyz',
-    'euler_zyz_to_rotation_matrix',
-    'rotation_matrix_to_quaternion',
-    'quaternion_to_rotation_matrix',
-    'compute_angular_displacement',
-    'unwrap_euler_angles',
-
+    "TrajectoryData",
+    "load_trajectory",
+    "validate_trajectory",
+    "inertia_tensor",
+    "principal_axes",
+    "extract_orientation_trajectory",
+    "rotation_matrix_to_euler_zyz",
+    "euler_zyz_to_rotation_matrix",
+    "rotation_matrix_to_quaternion",
+    "quaternion_to_rotation_matrix",
+    "compute_angular_displacement",
+    "unwrap_euler_angles",
     # Observables
-    'compute_all_observables',  # Unified API (replaces individual functions)
+    "compute_all_observables",  # Unified API (replaces individual functions)
     # 'compute_angular_momentum',  # Moved to unified.py
     # 'decompose_angular_momentum',  # Moved to unified.py
     # 'angular_velocity_from_rotation_matrices',  # Moved to unified.py
     # 'compute_angular_velocity_from_trajectory',  # Moved to unified.py
     # 'compute_torque',  # Moved to unified.py
     # 'validate_euler_equation',  # Moved to unified.py
-    'mean_squared_angular_displacement',
-    'extract_diffusion_coefficient',
-    'analyze_diffusion',
-
+    "mean_squared_angular_displacement",
+    "extract_diffusion_coefficient",
+    "analyze_diffusion",
     # Analysis
-    'autocorrelation_function',
-    'cross_correlation_function',
-    'extract_friction_from_acf',
-    'orientation_dependent_friction',
-    'compute_pmf_1d',
-    'compute_pmf_2d',
-    'jacobian_euler_angles',
-    'free_energy_difference',
-
+    "autocorrelation_function",
+    "cross_correlation_function",
+    "extract_friction_from_acf",
+    "orientation_dependent_friction",
+    "compute_pmf_1d",
+    "compute_pmf_2d",
+    "jacobian_euler_angles",
+    "free_energy_difference",
     # Models
-    'LangevinIntegrator',
-    'AnisotropicLangevin',
-    'TotalEnergy',
-    'ElectrostaticEnergy',
-    'HydrophobicEnergy',
-
+    "LangevinIntegrator",
+    "AnisotropicLangevin",
+    "TotalEnergy",
+    "ElectrostaticEnergy",
+    "HydrophobicEnergy",
     # I/O
-    'load_gromacs_trajectory',
-    'detect_trajectory_contents',
-    'save_results_json',
-    'load_results_json',
-    'save_results_npz',
-    'load_results_npz',
-
+    "load_gromacs_trajectory",
+    "detect_trajectory_contents",
+    "save_results_json",
+    "load_results_json",
+    "save_results_npz",
+    "load_results_npz",
+    "generate_plumed_input",
+    "read_colvar_file",
+    "PlumedConfig",
+    "PlumedWriter",
     # Configuration
-    'AnalysisConfig',
-    'load_config_with_overrides',
-
+    "AnalysisConfig",
+    "load_config_with_overrides",
     # Utils
-    'bootstrap_confidence_interval',
-    'block_average',
-    'circular_mean',
-    'circular_std',
+    "bootstrap_confidence_interval",
+    "block_average",
+    "circular_mean",
+    "circular_std",
 ]

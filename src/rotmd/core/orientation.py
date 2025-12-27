@@ -81,23 +81,21 @@ def euler_zyz_to_rotation_matrix(phi: float, theta: float, psi: float) -> np.nda
         R: (3, 3) rotation matrix
     """
     # Individual rotation matrices
-    Rz_phi = np.array([
-        [np.cos(phi), -np.sin(phi), 0],
-        [np.sin(phi),  np.cos(phi), 0],
-        [0,            0,           1]
-    ])
+    Rz_phi = np.array(
+        [[np.cos(phi), -np.sin(phi), 0], [np.sin(phi), np.cos(phi), 0], [0, 0, 1]]
+    )
 
-    Ry_theta = np.array([
-        [ np.cos(theta), 0, np.sin(theta)],
-        [ 0,             1, 0            ],
-        [-np.sin(theta), 0, np.cos(theta)]
-    ])
+    Ry_theta = np.array(
+        [
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)],
+        ]
+    )
 
-    Rz_psi = np.array([
-        [np.cos(psi), -np.sin(psi), 0],
-        [np.sin(psi),  np.cos(psi), 0],
-        [0,            0,           1]
-    ])
+    Rz_psi = np.array(
+        [[np.cos(psi), -np.sin(psi), 0], [np.sin(psi), np.cos(psi), 0], [0, 0, 1]]
+    )
 
     # R = Rz(φ) Ry(θ) Rz(ψ)
     return Rz_phi @ Ry_theta @ Rz_psi
@@ -136,9 +134,12 @@ def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
     rot = Rotation.from_quat(q_scipy)
     return rot.as_matrix()
 
-def extract_orientation(positions: np.ndarray,
-                        masses: np.ndarray,
-                        reference_frame: Optional[np.ndarray] = None) -> np.ndarray:
+
+def extract_orientation(
+    positions: np.ndarray,
+    masses: np.ndarray,
+    reference_frame: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Extract Euler angles trajectory from atomic positions.
 
@@ -155,7 +156,7 @@ def extract_orientation(positions: np.ndarray,
                         If None, uses lab frame.
 
     Returns:
-        Rotation matrix 
+        Rotation matrix
 
     Notes:
         - Positions should be centered at origin (use trajectory.load_trajectory with center=True)
@@ -163,6 +164,7 @@ def extract_orientation(positions: np.ndarray,
         - Handles sign ambiguity in eigenvectors for smooth trajectories
     """
     from .inertia import inertia_tensor, principal_axes
+
     prev_axes = None
 
     # Compute inertia tensor and principal axes
@@ -175,25 +177,22 @@ def extract_orientation(positions: np.ndarray,
     if reference_frame is not None:
         R = R @ reference_frame.T
 
-    return R 
+    return R
 
 
-
-
-def extract_orientation_trajectory(positions: np.ndarray,
-                                   masses: np.ndarray,
-                                   reference_frame: Optional[np.ndarray] = None,
-                                   use_jax: bool = True) -> np.ndarray:
+def extract_orientation_trajectory(
+    positions: np.ndarray,
+    masses: np.ndarray,
+    reference_frame: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
-    Extract Euler angles trajectory from atomic positions (JAX-Accelerated).
-
-    Now 100-500x faster on GPU using JAX batched operations!
+    Extract Euler angles trajectory from atomic positions.
 
     This function computes the protein's orientation at each frame by:
-    1. Computing inertia tensor from positions (batched with JAX)
-    2. Finding principal axes (batched)
-    3. Constructing rotation matrix from principal axes (JAX scan for sign consistency)
-    4. Converting to Euler angles (vectorized)
+    1. Computing inertia tensor from positions
+    2. Finding principal axes (eigenvectors)
+    3. Constructing rotation matrix from principal axes
+    4. Converting to Euler angles
 
     Args:
         positions: (n_frames, n_atoms, 3) atomic positions
@@ -201,7 +200,6 @@ def extract_orientation_trajectory(positions: np.ndarray,
         reference_frame: Optional (3, 3) reference orientation.
                         If provided, rotations are relative to this frame.
                         If None, uses lab frame.
-        use_jax: If True (default), use JAX acceleration. Set False for debugging.
 
     Returns:
         euler_angles: (n_frames, 3) array of [phi, theta, psi] in radians
@@ -210,8 +208,7 @@ def extract_orientation_trajectory(positions: np.ndarray,
     Notes:
         - Positions should be centered at origin (use trajectory.load_trajectory with center=True)
         - Principal axes are ordered by eigenvalues (I1 >= I2 >= I3)
-        - Handles sign ambiguity in eigenvectors for smooth trajectories via JAX scan
-        - JAX version is 100-500x faster on GPU for typical trajectories (1000+ frames)
+        - Handles sign ambiguity in eigenvectors for smooth trajectories
 
     Examples:
         >>> import numpy as np
@@ -221,74 +218,44 @@ def extract_orientation_trajectory(positions: np.ndarray,
         >>> print(euler.shape, R.shape)
         (1000, 3) (1000, 3, 3)
     """
-    if use_jax:
-        # JAX-accelerated path (100-500x faster on GPU)
-        from rotmd.core import jax_kernels as jk
 
-        # Compute COM for all frames (batched)
-        com = tkcompute_com_batch(tkto_jax(positions), tkto_jax(masses))
+    # Original NumPy path (for debugging/validation)
+    from .inertia import inertia_tensor, principal_axes
 
-        # Extract rotation matrices using JAX scan (handles sign consistency)
-        R = tkextract_rotation_trajectory(
-            tkto_jax(positions),
-            tkto_jax(masses),
-            com
-        )
+    n_frames = len(positions)
+    euler_angles = np.zeros((n_frames, 3))
+    rotation_matrix = np.zeros((n_frames, 3, 3))
+    prev_axes = None
 
-        # Convert rotation matrices back to NumPy
-        rotation_matrix = tkto_numpy(R)
+    for i in range(n_frames):
+        pos = positions[i]
 
-        # Apply reference frame if provided
+        # Compute inertia tensor and principal axes
+        I = inertia_tensor(pos, masses)
+        moments, axes = principal_axes(I)
+
+        # Ensure consistent sign convention across frames
+        if prev_axes is not None:
+            # Flip axes if they point in opposite direction from previous frame
+            for j in range(3):
+                if np.dot(axes[:, j], prev_axes[:, j]) < 0:
+                    axes[:, j] *= -1
+
+        prev_axes = axes.copy()
+
+        # Rotation matrix from lab frame to body frame
+        R = axes.T  # Principal axes as columns → rotation matrix
+
+        # If reference frame provided, compute relative rotation
         if reference_frame is not None:
-            rotation_matrix = rotation_matrix @ reference_frame.T
+            R = R @ reference_frame.T
 
-        # Convert to Euler angles (vectorized)
-        n_frames = len(positions)
-        euler_angles = np.zeros((n_frames, 3))
-        for i in range(n_frames):
-            phi, theta, psi = rotation_matrix_to_euler_zyz(rotation_matrix[i])
-            euler_angles[i] = [phi, theta, psi]
+        # Convert to Euler angles
+        phi, theta, psi = rotation_matrix_to_euler_zyz(R)
+        euler_angles[i] = [phi, theta, psi]
+        rotation_matrix[i] = R
 
-        return euler_angles, rotation_matrix
-
-    else:
-        # Original NumPy path (for debugging/validation)
-        from .inertia import inertia_tensor, principal_axes
-
-        n_frames = len(positions)
-        euler_angles = np.zeros((n_frames, 3))
-        rotation_matrix = np.zeros((n_frames, 3, 3))
-        prev_axes = None
-
-        for i in range(n_frames):
-            pos = positions[i]
-
-            # Compute inertia tensor and principal axes
-            I = inertia_tensor(pos, masses)
-            moments, axes = principal_axes(I)
-
-            # Ensure consistent sign convention across frames
-            if prev_axes is not None:
-                # Flip axes if they point in opposite direction from previous frame
-                for j in range(3):
-                    if np.dot(axes[:, j], prev_axes[:, j]) < 0:
-                        axes[:, j] *= -1
-
-            prev_axes = axes.copy()
-
-            # Rotation matrix from lab frame to body frame
-            R = axes.T  # Principal axes as columns → rotation matrix
-
-            # If reference frame provided, compute relative rotation
-            if reference_frame is not None:
-                R = R @ reference_frame.T
-
-            # Convert to Euler angles
-            phi, theta, psi = rotation_matrix_to_euler_zyz(R)
-            euler_angles[i] = [phi, theta, psi]
-            rotation_matrix[i] = R
-
-        return euler_angles, rotation_matrix
+    return euler_angles, rotation_matrix
 
 
 def compute_angular_displacement(euler1: np.ndarray, euler2: np.ndarray) -> float:
@@ -347,9 +314,9 @@ def unwrap_euler_angles(euler_angles: np.ndarray) -> np.ndarray:
     return unwrapped
 
 
-def compute_orientation_time_derivative(euler_angles: np.ndarray,
-                                       times: np.ndarray,
-                                       smooth_window: int = 5) -> np.ndarray:
+def compute_orientation_time_derivative(
+    euler_angles: np.ndarray, times: np.ndarray, smooth_window: int = 5
+) -> np.ndarray:
     """
     Compute time derivatives of Euler angles.
 
@@ -376,9 +343,9 @@ def compute_orientation_time_derivative(euler_angles: np.ndarray,
     for i in range(3):
         # Smooth if requested
         if smooth_window > 1:
-            smoothed = savgol_filter(unwrapped[:, i],
-                                    window_length=min(smooth_window, n_frames),
-                                    polyorder=2)
+            smoothed = savgol_filter(
+                unwrapped[:, i], window_length=min(smooth_window, n_frames), polyorder=2
+            )
         else:
             smoothed = unwrapped[:, i]
 
@@ -393,8 +360,9 @@ def compute_orientation_time_derivative(euler_angles: np.ndarray,
     return derivatives
 
 
-def orientation_autocorrelation(euler_angles: np.ndarray,
-                               max_lag: Optional[int] = None) -> np.ndarray:
+def orientation_autocorrelation(
+    euler_angles: np.ndarray, max_lag: Optional[int] = None
+) -> np.ndarray:
     """
     Compute orientational autocorrelation function.
 
@@ -420,22 +388,23 @@ def orientation_autocorrelation(euler_angles: np.ndarray,
     for lag in range(max_lag):
         cos_angles = []
         for i in range(n_frames - lag):
-            angle = compute_angular_displacement(euler_angles[i],
-                                                euler_angles[i + lag])
+            angle = compute_angular_displacement(euler_angles[i], euler_angles[i + lag])
             cos_angles.append(np.cos(angle))
         acf[lag] = np.mean(cos_angles)
 
     return acf
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     print("Protein Orientation Module")
     print("==========================")
     print()
     print("Example usage:")
     print()
-    print("from protein_orientation.core.orientation import extract_orientation_trajectory")
+    print(
+        "from protein_orientation.core.orientation import extract_orientation_trajectory"
+    )
     print("from protein_orientation.core.trajectory import load_trajectory")
     print()
     print("# Load trajectory")
