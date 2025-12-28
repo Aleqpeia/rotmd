@@ -3,8 +3,7 @@
   lib,
   config,
   ...
-}:
-{
+}: {
   packages = [
     config.languages.python.package.pkgs.pjsua2
     pkgs.zlib
@@ -12,7 +11,8 @@
     pkgs.ninja
     pkgs.python3Packages.freesasa
     (pkgs.texlive.combine {
-      inherit (pkgs.texlive)
+      inherit
+        (pkgs.texlive)
         scheme-medium
         beamer
         translator
@@ -53,9 +53,17 @@
     };
   };
 
+  languages.rust = {
+    enable = true;
+    channel = "stable";
+    version = "1.81.0";
+  };
+
   git-hooks.hooks = {
     alejandra.enable = true;
     black.enable = true;
+    rustfmt.enable = true;
+    clippy.enable = true;
   };
 
   # ============================================

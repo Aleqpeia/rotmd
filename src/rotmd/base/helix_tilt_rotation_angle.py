@@ -5,16 +5,15 @@ import stanalyzer.cli.stanalyzer as sta
 import MDAnalysis as mda
 import numpy as np
 
-ANALYSIS_NAME = 'helix_tilt_rotation_angle'
+ANALYSIS_NAME = "helix_tilt_rotation_angle"
 
 if t.TYPE_CHECKING:
     import numpy.typing as npt
 
-NDFloat: t.TypeAlias = 'npt.NDArray[np.float_]'
+NDFloat: t.TypeAlias = "npt.NDArray[np.float_]"
 
 
-def header(outfile: sta.FileLike | None = None,
-           np_formatted: bool = False) -> str:
+def header(outfile: sta.FileLike | None = None, np_formatted: bool = False) -> str:
     """Returns a header string and, if optionally writes it to a file
 
     If np_formatted is true, the `#` is omitted."""
@@ -29,8 +28,13 @@ def header(outfile: sta.FileLike | None = None,
 
 
 def write_tilt_rotation_angle(
-        psf: sta.FileRef, traj: sta.FileRefList, helix_start: int,
-        helix_end: int, out: sta.FileRef, interval: int = 1) -> None:
+    psf: sta.FileRef,
+    traj: sta.FileRefList,
+    helix_start: int,
+    helix_end: int,
+    out: sta.FileRef,
+    interval: int = 1,
+) -> None:
     """Writes Tilt and Rotation Angles to `out` file"""
 
     # Read traj and psf
@@ -49,17 +53,20 @@ def write_tilt_rotation_angle(
 
     def calculate_tilt_angle(axis: mda.AtomGroup) -> NDFloat:
         """Calculate the tilt angle"""
-        z_axis = np.array([0., 0., 1.])
+        z_axis = np.array([0.0, 0.0, 1.0])
         tilt_angle = np.degrees(np.arccos(np.dot(axis, z_axis)))
         return t.cast(NDFloat, tilt_angle)
 
-    def calculate_rotation_angle(atoms: mda.AtomGroup,
-                                 axis: NDFloat) -> NDFloat:
+    def calculate_rotation_angle(atoms: mda.AtomGroup, axis: NDFloat) -> NDFloat:
         """Calculate the rotation angle ρ"""
         positions = atoms.positions - atoms.center_of_geometry()
-        reference_vector = np.array([1, 0, 0])  # Example reference vector in the x-direction
-        angles = np.arctan2(np.dot(positions, np.cross(reference_vector, axis)),
-                            np.dot(positions, reference_vector))
+        reference_vector = np.array(
+            [1, 0, 0]
+        )  # Example reference vector in the x-direction
+        angles = np.arctan2(
+            np.dot(positions, np.cross(reference_vector, axis)),
+            np.dot(positions, reference_vector),
+        )
         return t.cast(NDFloat, np.degrees(np.mean(angles)))
 
     list_results: list[tuple[NDFloat, NDFloat, NDFloat]] = []
@@ -71,17 +78,30 @@ def write_tilt_rotation_angle(
 
     results: NDFloat = np.array(list_results)
 
-    with sta.resolve_file(out, 'w') as outfile:
-        np.savetxt(outfile, results, fmt='%10.5f %10.5f %10.5f', header=header(np_formatted=True))
+    with sta.resolve_file(out, "w") as outfile:
+        np.savetxt(
+            outfile,
+            results,
+            fmt="%10.5f %10.5f %10.5f",
+            header=header(np_formatted=True),
+        )
 
 
 def get_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=f'stanalyzer {ANALYSIS_NAME}')
-    sta.add_project_args(parser, 'psf', 'traj', 'out', 'interval')
-    parser.add_argument('--helix-start', type=int, required=True,
-                        help="Starting residue number of the helix")
-    parser.add_argument('--helix-end', type=int, required=True,
-                        help="Ending residue number of the helix")
+    parser = argparse.ArgumentParser(prog=f"stanalyzer {ANALYSIS_NAME}")
+    sta.add_project_args(parser, "psf", "traj", "out", "interval")
+    parser.add_argument(
+        "--helix-start",
+        type=int,
+        required=True,
+        help="Starting residue number of the helix",
+    )
+    parser.add_argument(
+        "--helix-end",
+        type=int,
+        required=True,
+        help="Ending residue number of the helix",
+    )
 
     return parser
 
@@ -93,5 +113,5 @@ def main(settings: dict | None = None) -> None:
     write_tilt_rotation_angle(**settings)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

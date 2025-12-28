@@ -74,6 +74,7 @@ from .analysis.pmf import (
     jacobian_euler_angles,
     free_energy_difference,
 )
+from .analysis import membrane
 
 # Models
 from .models.langevin import LangevinIntegrator, AnisotropicLangevin
@@ -316,6 +317,7 @@ __all__ = [
     "compute_pmf_2d",
     "jacobian_euler_angles",
     "free_energy_difference",
+    "membrane",
     # Models
     "LangevinIntegrator",
     "AnisotropicLangevin",

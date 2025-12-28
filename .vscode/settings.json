@@ -1,0 +1,7 @@
+{
+    "function-explorer.hideFolders": false,
+    "function-explorer.filesToExclude": "**/.devenv/, **/.venv/, **/target/, **/__pycache__/",
+    "claudeCode.environmentVariables": [
+        
+    ],
+}
