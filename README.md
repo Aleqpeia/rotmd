@@ -141,25 +141,8 @@ for i, (theta, psi, energy) in enumerate(minima):
           f"ψ={np.degrees(psi):.1f}°, F={energy:.2f} kcal/mol")
 ```
 
-### 4. Analyzing Diffusion
 
-```python
-from rotmd.observables.diffusion import analyze_diffusion
-
-# JAX-accelerated diffusion analysis
-results = analyze_diffusion(
-    euler_angles,
-    traj_data['times'],
-    verbose=True
-)
-
-print(f"Isotropic D: {results['D_msad']:.4f} ± {results['D_msad_err']:.4f} rad²/ps")
-print(f"D_φ: {results['D_aniso'][0]:.4f} rad²/ps")
-print(f"D_θ: {results['D_aniso'][1]:.4f} rad²/ps")
-print(f"D_ψ: {results['D_aniso'][2]:.4f} rad²/ps")
-```
-
-### 5. Angular Momentum Analysis
+### 4. Angular Momentum Analysis
 
 ```python
 from rotmd.core.observables_classes import AngularMomentum, Torque
@@ -184,32 +167,6 @@ print(f"Spin/Nutation ratio: {L.spin_nutation_ratio.mean:.2f}")
 L.to_xarray().to_netcdf('angular_momentum.nc')
 ```
 
-### 6. Langevin Validation (JAX-based)
-
-```python
-from rotmd.models.langevin import LangevinIntegrator, validate_against_trajectory
-from rotmd.models.energy import PMFPotential
-
-# Create PMF potential from MD
-pmf_potential = PMFPotential.from_histogram(
-    euler_angles,
-    temperature=300.0
-)
-
-# JAX-accelerated Langevin integration with optax optimizer
-validation = validate_against_trajectory(
-    euler_angles,
-    traj_data['times'],
-    pmf_potential,
-    friction=100.0,  # amu/ps
-    temperature=300.0,
-    n_trials=10
-)
-
-print(f"Mean error: {validation['mean_error']:.4f} rad")
-print(f"Std error: {validation['std_error']:.4f} rad")
-```
-
 ### 7. Visualization
 
 ```python
@@ -222,14 +179,6 @@ plot_pmf_heatmap(
     vmax=10.0,
     mark_minima=True,
     save_path='pmf_heatmap.png'
-)
-
-# Phase space
-L_mag = np.linalg.norm(L_results['L'], axis=1)
-plot_energy_vs_angular_momentum(
-    energies, L_mag,
-    times=traj_data['times'],
-    save_path='phase_space.png'
 )
 ```
 
@@ -311,50 +260,6 @@ config = AnalysisConfig.load('analysis_config.yaml')
 temp = config.get('analysis.temperature')
 ```
 
-## Theory Background
-
-### Euler Angles (ZYZ Convention)
-- **φ**: First rotation about lab Z-axis (0 to 2π)
-- **θ**: Nutation angle about new Y-axis (0 to π)
-- **ψ**: Spin angle about final Z-axis (0 to 2π)
-
-### Angular Momentum Decomposition
-```
-L = L∥ + L⊥
-```
-- **L∥**: Parallel to principal axis (spin)
-- **L⊥**: Perpendicular to principal axis (nutation)
-
-### Potential of Mean Force
-```
-F(θ,ψ) = -kT ln[P(θ,ψ) sin(θ)]
-```
-The sin(θ) factor is the Jacobian for spherical coordinates.
-
-### Rotational Diffusion
-From mean squared angular displacement:
-```
-<Δθ²(t)> = 6D·t  (isotropic)
-```
-
-From velocity autocorrelation (Green-Kubo):
-```
-D = (1/3) ∫₀^∞ <ω(0)·ω(t)> dt
-```
-
-### Euler's Equation
-```
-dL/dt = τ
-```
-Where τ = Σᵢ rᵢ × Fᵢ is the total torque.
-
-## Examples
-
-See `examples/` directory for complete workflows:
-- `torque_validation_example.py`: Angular momentum and torque analysis
-- `pmf_analysis_example.py`: Free energy landscape computation
-- `diffusion_analysis_example.py`: Rotational diffusion analysis
-- `langevin_validation_example.py`: Model validation
 
 ## Citation
 
@@ -366,7 +271,7 @@ If you use this toolkit in your research, please cite:
   title = {rotmd - Rotational Molecular Dynamics Analysis Toolkit},
   year = {2025},
   version = {0.1.0},
-  url = {https://github.com/yourusername/rotmd}
+  url = {https://github.com/Aleqpeia/rotmd}
 }
 ```
 
@@ -400,11 +305,3 @@ For questions and bug reports, please open an issue on GitHub.
 - Matplotlib >= 3.8 (visualization)
 - h5py >= 3.10 (HDF5 support)
 - PyYAML >= 6.0 (YAML configs)
-
-## Acknowledgments
-
-Based on the theoretical framework from:
-- Ivanov, I. et al. (2013) "Ionizing radiation..." J. Biol. Chem.
-- Your research group's publications
-
-Developed as part of the ST-Analyzer project for protein orientation analysis in molecular dynamics simulations.
