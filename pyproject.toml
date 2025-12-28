@@ -27,6 +27,8 @@ rich = "^13.0"
 pydantic = "^2.5"
 pyyaml = "^6.0"
 tqdm = "^4.66"
+# Lipid analysis
+lipyds = ">=0.0.1"
 
 [tool.poetry.group.gpu]
 optional = true
