@@ -62,7 +62,6 @@
   git-hooks.hooks = {
     alejandra.enable = true;
     black.enable = true;
-    rustfmt.enable = true;
     clippy.enable = true;
   };
 
