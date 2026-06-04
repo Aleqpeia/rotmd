@@ -58,14 +58,56 @@ def rotation_matrix_to_euler_zyz(R: np.ndarray) -> Tuple[float, float, float]:
             phi = np.arctan2(-R[1, 0], R[0, 0])
             psi = 0.0
     else:
-        phi = np.arctan2(R[2, 1], R[2, 0])
-        psi = np.arctan2(R[1, 2], -R[0, 2])
+        # For R = Rz(phi) Ry(theta) Rz(psi):
+        #   R[1,2] = sin(phi) sin(theta),  R[0,2] =  cos(phi) sin(theta)
+        #   R[2,1] = sin(theta) sin(psi),  R[2,0] = -sin(theta) cos(psi)
+        # With sin(theta) > 0 these give phi and psi directly via atan2.
+        phi = np.arctan2(R[1, 2], R[0, 2])
+        psi = np.arctan2(R[2, 1], -R[2, 0])
 
     # Normalize to [0, 2π] for phi and psi, [0, π] for theta
     phi = phi % (2 * np.pi)
     psi = psi % (2 * np.pi)
 
     return phi, theta, psi
+
+
+def membrane_tilt_angle(theta: np.ndarray) -> np.ndarray:
+    """
+    Membrane tilt angle: 90° when the principal axis is collinear with the
+    membrane normal, 0° when it lies in the membrane plane.
+
+    The ZYZ nutation angle ``theta`` measures the angle between the protein's
+    principal axis and the lab z-axis (the membrane normal), and lives in
+    ``[0, π]``. For a *tilt relative to the membrane surface* it is more
+    convenient to have the perpendicular orientation sit at 90° instead of 0°.
+
+    We treat the principal axis as an *undirected line* (its eigenvector sign is
+    arbitrary, so ``theta`` and ``π − theta`` describe the same physical
+    orientation). Folding the nutation angle into the acute branch and shifting
+    gives::
+
+        tilt = π/2 − min(theta, π − theta) = arcsin(|cos(theta)|)
+
+    so the result is sign-stable and always in ``[0, π/2]``:
+
+    - ``theta = 0`` or ``π``  (axis along the normal)  → ``tilt = π/2`` (90°)
+    - ``theta = π/2``         (axis in the plane)       → ``tilt = 0``
+
+    Args:
+        theta: ZYZ nutation angle(s) in radians, any shape.
+
+    Returns:
+        Tilt angle(s) in radians, same shape as ``theta``, in ``[0, π/2]``.
+
+    Examples:
+        >>> import numpy as np
+        >>> np.degrees(membrane_tilt_angle(np.array([0.0, np.pi / 2, np.pi])))
+        array([90.,  0., 90.])
+    """
+    # arcsin(|cos θ|) is the numerically clean form of π/2 − min(θ, π − θ);
+    # clip guards against |cos θ| drifting just past 1.0 from rounding.
+    return np.arcsin(np.clip(np.abs(np.cos(theta)), 0.0, 1.0))
 
 
 def euler_zyz_to_rotation_matrix(phi: float, theta: float, psi: float) -> np.ndarray:
@@ -393,26 +435,3 @@ def orientation_autocorrelation(
         acf[lag] = np.mean(cos_angles)
 
     return acf
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("Protein Orientation Module")
-    print("==========================")
-    print()
-    print("Example usage:")
-    print()
-    print(
-        "from protein_orientation.core.orientation import extract_orientation_trajectory"
-    )
-    print("from protein_orientation.core.trajectory import load_trajectory")
-    print()
-    print("# Load trajectory")
-    print("traj = load_trajectory('system.gro', 'traj.trr')")
-    print()
-    print("# Extract Euler angles")
-    print("euler = extract_orientation_trajectory(traj.positions, traj.masses)")
-    print()
-    print("# Analyze orientation dynamics")
-    print("phi, theta, psi = euler.T")
-    print("print(f'Mean nutation angle: {np.mean(theta):.2f} rad')")
