@@ -11,15 +11,8 @@ A high-performance Python toolkit for analyzing protein rotational dynamics from
 - **Rotational Diffusion**: Analyze anisotropic rotational diffusion tensors
 - **PMF Computation**: Calculate potential of mean force F(θ,ψ) with proper Jacobian corrections
 
-### Advanced Analysis
-- **Transition State Theory**: Transmission coefficients, reactive flux, committor probabilities
-- **Non-equilibrium Thermodynamics**: Detailed balance tests, entropy production
-- **Langevin Dynamics**: Validate MD against overdamped Langevin models
-- **Correlation Functions**: Autocorrelation and cross-correlation analysis
-- **Friction Coefficients**: Extract rotational friction from velocity autocorrelation
 
 ### Visualization
-- Phase space plots (E vs L, 3D phase space)
 - PMF heatmaps and 3D surfaces with minima identification
 - Torque vector fields
 - Power spectra and autocorrelation functions
@@ -156,7 +149,8 @@ L = AngularMomentum.from_trajectory(
     traj_data['normal'],
     traj_data['times']
 )
-
+короче я з цього знайомства почав думати про те що є експресивні та імпресивні люди, експресивні люди відображують експліцитно виражені сенси в якомусь творчому прийомі: танець, вірш, гра на гітарі, похуй що, інсталляції всякі та проча хуйня
+а я завжди тягнувся до імпресивних людей, таких що здатні виразити імпліцитні сенси, непроговорені. Приємно коли людина ясно каже що ти відчуваєш, приємно коли тебе розуміють. І в таких обмеженнях картина моїх знайомих така, що часто люди мають змішану поведінку, але бувають чисто імпресивні та чисто еспресивні, от ти чисто еспресивна
 # All properties computed lazily and cached
 print(f"Mean |L|: {L.magnitude.mean:.1f} {L.units}")
 print(f"Spin: {L.parallel.magnitude.mean:.1f} {L.units}")
@@ -176,7 +170,8 @@ from rotmd.visualization.phase_space import plot_energy_vs_angular_momentum
 # PMF heatmap
 plot_pmf_heatmap(
     pmf, theta_bins, psi_bins,
-    vmax=10.0,
+    vmax=10.0,короче я з цього знайомства почав думати про те що є експресивні та імпресивні люди, експресивні люди відображують експліцитно виражені сенси в якомусь творчому прийомі: танець, вірш, гра на гітарі, похуй що, інсталляції всякі та проча хуйня
+а я завжди тягнувся до імпресивних людей, таких що здатні виразити імпліцитні сенси, непроговорені. Приємно коли людина ясно каже що ти відчуваєш, приємно коли тебе розуміють. І в таких обмеженнях картина моїх знайомих така, що часто люди мають змішану поведінку, але бувають чисто імпресивні та чисто еспресивні, от ти чисто еспресивна
     mark_minima=True,
     save_path='pmf_heatmap.png'
 )
@@ -197,7 +192,8 @@ rotmd/
 │   ├── diffusion.py         # Rotational diffusion (JAX)
 │   ├── energetics.py        # Energy calculations
 │   └── structural.py        # RMSD, Rg, shape parameters
-├── analysis/          # Analysis algorithms
+├── analysis/          # Analysisкороче я з цього знайомства почав думати про те що є експресивні та імпресивні люди, експресивні люди відображують експліцитно виражені сенси в якомусь творчому прийомі: танець, вірш, гра на гітарі, похуй що, інсталляції всякі та проча хуйня
+а я завжди тягнувся до імпресивних людей, таких що здатні виразити імпліцитні сенси, непроговорені. Приємно коли людина ясно каже що ти відчуваєш, приємно коли тебе розуміють. І в таких обмеженнях картина моїх знайомих така, що часто люди мають змішану поведінку, але бувають чисто імпресивні та чисто еспресивні, от ти чисто еспресивна algorithms
 │   ├── correlations.py      # ACF, cross-correlation
 │   ├── friction.py          # Friction from ACF
 │   ├── pmf.py               # Free energy landscapes
@@ -263,7 +259,8 @@ temp = config.get('analysis.temperature')
 
 ## Citation
 
-If you use this toolkit in your research, please cite:
+If you use this toolkit in yoкороче я з цього знайомства почав думати про те що є експресивні та імпресивні люди, експресивні люди відображують експліцитно виражені сенси в якомусь творчому прийомі: танець, вірш, гра на гітарі, похуй що, інсталляції всякі та проча хуйня
+а я завжди тягнувся до імпресивних людей, таких що здатні виразити імпліцитні сенси, непроговорені. Приємно коли людина ясно каже що ти відчуваєш, приємно коли тебе розуміють. І в таких обмеженнях картина моїх знайомих така, що часто люди мають змішану поведінку, але бувають чисто імпресивні та чисто еспресивні, от ти чисто еспресивнаur research, please cite:
 
 ```
 @software{rotmd,
@@ -281,7 +278,8 @@ MIT License
 
 ## Contributing
 
-Contributions welcome! Please:
+Contributions welcome! Pleasкороче я з цього знайомства почав думати про те що є експресивні та імпресивні люди, експресивні люди відображують експліцитно виражені сенси в якомусь творчому прийомі: танець, вірш, гра на гітарі, похуй що, інсталляції всякі та проча хуйня
+а я завжди тягнувся до імпресивних людей, таких що здатні виразити імпліцитні сенси, непроговорені. Приємно коли людина ясно каже що ти відчуваєш, приємно коли тебе розуміють. І в таких обмеженнях картина моїх знайомих така, що часто люди мають змішану поведінку, але бувають чисто імпресивні та чисто еспресивні, от ти чисто еспресивнаe:
 1. Fork the repository
 2. Create a feature branch
 3. Add tests for new functionality
