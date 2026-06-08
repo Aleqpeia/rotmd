@@ -41,6 +41,9 @@
 
   languages.python = {
     enable = true;
+    # Pin to 3.13: numba/llvmlite lack 3.14 wheels and llvmlite fails to build
+    # from source on 3.14 (distutils spawn() dry_run removal).
+    version = "3.13";
     poetry = {
       enable = true;
       activate.enable = true;

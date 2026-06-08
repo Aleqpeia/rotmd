@@ -12,26 +12,28 @@ readme = "README.md"
 packages = [{ include = "rotmd", from = "src" }]
 
 [tool.poetry.dependencies]
-python = "^3.12"
-numpy = "^2.0.0"
-scipy = "^1.11"
-MDAnalysis = "^2.6.0"
-pytim = "^1.0"
+# Capped below 3.14: numba/llvmlite have no 3.14 wheels yet, so a 3.14 venv is
+# forced to build them (and an old numpy) from source, which fails.
+python = ">=3.12,<3.14"
+numpy = "^2.3.0"
+scipy = "^1.17.2"
+MDAnalysis = "^2.1.0"
 matplotlib = "^3.8"
 xarray = ">=2024.1"
 h5py = "^3.10"
 # Numba for CPU-optimized JIT compilation (default runtime)
-numba = "^0.62.0"
+numba = "^0.62"
 click = "^8.1"
 rich = "^13.0"
 pydantic = "^2.5"
 pyyaml = "^6.0"
 tqdm = "^4.66"
 # Lipid analysis
-lipyds = ">=0.0.1"
 # Tabular data + Poisson GLM (scikit-learn backend with resampling inference)
-pandas = "^2.2"
-scikit-learn = "^1.4"
+pandas = "^2.1, <2.3"
+scikit-learn = "^1.4, <1.9.0"
+networkx = "^3.6.1"
+freesasa = "^2.2.1"
 
 [tool.poetry.group.gpu]
 optional = true
