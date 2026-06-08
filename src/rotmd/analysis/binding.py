@@ -12,10 +12,16 @@ count data in the same spirit as :mod:`rotmd.analysis.crossings`:
     rate of such events measures how *labile* the interface is, while the
     bound fraction measures how *occupied* it is.
 
-These contact series require the actual trajectory (an MDAnalysis
-``Universe``), unlike the orientation crossings which can be replayed from the
-extracted angle arrays. MDAnalysis is imported lazily so importing this module
-never forces the (heavy) dependency until a contact calculation is requested.
+For a chemistry-aware view of the same interface, :func:`hbond_timeseries`
+produces a per-frame *hydrogen bond* count between two selections. It is a
+drop-in series for :func:`count_binding_events`, so H-bond formation and
+breaking are counted with exactly the same threshold-crossing machinery as
+lipid contacts.
+
+These series require the actual trajectory (an MDAnalysis ``Universe``),
+unlike the orientation crossings which can be replayed from the extracted
+angle arrays. MDAnalysis is imported lazily so importing this module never
+forces the (heavy) dependency until a contact calculation is requested.
 
 Author: rotmd contributors
 Date: 2026
@@ -64,7 +70,7 @@ class BindingCounts:
 def contact_timeseries(
     universe: mda.Universe,
     protein_sel: str = "protein",
-    lipid_sel: str = "resname POPI POP2 PIP2 DMPI DOPI",
+    lipid_sel: str = "resname POPI2 DMPI2",
     *,
     cutoff: float = 6.0,
     level: str = "residue",
@@ -122,6 +128,111 @@ def contact_timeseries(
         contacts.append(near.n_residues if level == "residue" else near.n_atoms)
 
     return np.asarray(times, dtype=float), np.asarray(contacts, dtype=int)
+
+
+def hbond_timeseries(
+    universe: mda.Universe,
+    sel_a: str = "protein",
+    sel_b: str = "resname POPI2 DMPI2",
+    *,
+    d_a_cutoff: float = 3.0,
+    d_h_a_angle_cutoff: float = 150.0,
+    hydrogens_sel: str | None = None,
+    acceptors_sel: str | None = None,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Number of hydrogen bonds *between* two selections per frame.
+
+    This is the directional, chemistry-aware counterpart to
+    :func:`contact_timeseries`. Where a contact merely asks "is a lipid atom
+    within a cutoff of the protein", a hydrogen bond additionally requires a
+    donor-acceptor distance *and* a donor-H-acceptor angle to fall within
+    cutoffs, so it captures specific headgroup interactions rather than bulk
+    proximity. The returned series plugs directly into
+    :func:`count_binding_events` to count formation / breaking events.
+
+    We restrict the search to bonds that bridge the two selections (via
+    MDAnalysis' ``between=``) so that intra-protein and intra-lipid bonds do
+    not swamp the interfacial signal. When ``hydrogens_sel`` / ``acceptors_sel``
+    are not supplied we let MDAnalysis guess them *from the two selections only*
+    (not the whole universe), which is both faster and avoids counting solvent.
+
+    Args:
+        universe: An MDAnalysis ``Universe`` with the trajectory loaded.
+        sel_a: First selection (e.g. the protein).
+        sel_b: Second selection (e.g. the lipid species of interest).
+        d_a_cutoff: Donor-acceptor distance cutoff in angstrom.
+        d_h_a_angle_cutoff: Donor-H-acceptor angle cutoff in degrees.
+        hydrogens_sel: Explicit hydrogen (donor-H) selection. ``None`` guesses
+            from ``sel_a`` and ``sel_b``.
+        acceptors_sel: Explicit acceptor selection. ``None`` guesses from
+            ``sel_a`` and ``sel_b``.
+        start, stop, step: Frame slice forwarded to the analysis run.
+
+    Returns:
+        ``(times, counts)`` with ``times`` in ps and ``counts`` the integer
+        number of inter-selection hydrogen bonds per analysed frame.
+
+    Raises:
+        ValueError: If either selection matches no atoms, or no donors /
+            acceptors can be found (e.g. a united-atom model lacking explicit
+            polar hydrogens).
+    """
+    # Imported lazily: H-bond analysis is a heavier, optional code path and we
+    # do not want importing this module to pull in MDAnalysis' submodules.
+    from MDAnalysis.analysis.hydrogenbonds import HydrogenBondAnalysis
+
+    if universe.select_atoms(sel_a).n_atoms == 0:
+        raise ValueError(f"selection matched no atoms: {sel_a!r}")
+    if universe.select_atoms(sel_b).n_atoms == 0:
+        raise ValueError(f"selection matched no atoms: {sel_b!r}")
+
+    hbonds = HydrogenBondAnalysis(
+        universe=universe,
+        between=[sel_a, sel_b],
+        d_a_cutoff=d_a_cutoff,
+        d_h_a_angle_cutoff=d_h_a_angle_cutoff,
+        update_selections=True,
+    )
+
+    # Build hydrogen / acceptor selections restricted to our two groups. The
+    # guess_* helpers return selection strings, which we OR together so a bond
+    # may have its donor on either side of the interface.
+    if hydrogens_sel is None:
+        guessed = [
+            s
+            for s in (hbonds.guess_hydrogens(sel_a), hbonds.guess_hydrogens(sel_b))
+            if s
+        ]
+        if not guessed:
+            raise ValueError(
+                "no hydrogen donors found in either selection; pass an explicit "
+                "hydrogens_sel (a united-atom model may lack polar hydrogens)"
+            )
+        hydrogens_sel = " or ".join(f"({s})" for s in guessed)
+    if acceptors_sel is None:
+        guessed = [
+            s
+            for s in (hbonds.guess_acceptors(sel_a), hbonds.guess_acceptors(sel_b))
+            if s
+        ]
+        if not guessed:
+            raise ValueError(
+                "no acceptors found in either selection; pass an explicit "
+                "acceptors_sel"
+            )
+        acceptors_sel = " or ".join(f"({s})" for s in guessed)
+
+    hbonds.hydrogens_sel = hydrogens_sel
+    hbonds.acceptors_sel = acceptors_sel
+    hbonds.run(start=start, stop=stop, step=step)
+
+    times = np.asarray(hbonds.times, dtype=float)
+    counts = np.asarray(hbonds.count_by_time(), dtype=int)
+    return times, counts
 
 
 def count_binding_events(

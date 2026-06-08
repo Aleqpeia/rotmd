@@ -17,6 +17,12 @@ A manifest looks like::
       lipid_sel: "resname POPI DMPI"
       cutoff: 6.0
       threshold: 0.5
+    hbonds:
+      sel_a: "protein"
+      sel_b: "resname POPI DMPI"
+      d_a_cutoff: 3.0
+      d_h_a_angle_cutoff: 150.0
+      threshold: 0.5
     systems:
       - label: simple
         replica: 1
@@ -108,6 +114,7 @@ class Manifest:
     reference_axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
     body_axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
     contacts: dict[str, Any] | None = None
+    hbonds: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Manifest:
@@ -122,6 +129,7 @@ class Manifest:
             reference_axis=tuple(raw.get("reference_axis", (0.0, 0.0, 1.0))),  # type: ignore[arg-type]
             body_axis=tuple(raw.get("body_axis", (0.0, 0.0, 1.0))),  # type: ignore[arg-type]
             contacts=raw.get("contacts"),
+            hbonds=raw.get("hbonds"),
         )
 
 
@@ -196,34 +204,83 @@ def _first_len(data: Any) -> int:
     raise ValueError("NPZ has none of theta/phi/psi/rotation_matrices")
 
 
-def _binding_counts_for_record(record: SystemRecord, manifest: Manifest):
-    """Compute binding counts for a record, or ``None`` if not configured/possible."""
-    if not manifest.contacts:
-        return None
+def _trajectory_counts_for_record(record: SystemRecord, manifest: Manifest):
+    """Compute trajectory-derived event counts (contacts and/or H-bonds).
+
+    Both observables reduce to a per-frame integer series that
+    :func:`~rotmd.analysis.binding.count_binding_events` turns into
+    binding/unbinding events, so they share one ``BindingCounts`` container;
+    the caller tags each with a ``coordinate`` label (``"contacts"`` vs
+    ``"hbonds"``) so the regression keeps their rates separate.
+
+    Returns a list of ``(coordinate, BindingCounts)`` pairs, possibly empty.
+
+    The MDAnalysis ``Universe`` is built **once** and reused for both analyses:
+    trajectories are large and reloading per observable would dominate runtime.
+    Records lacking a raw trajectory are silently skipped so a manifest can mix
+    contact/H-bond-enabled and orientation-only systems.
+    """
+    if not (manifest.contacts or manifest.hbonds):
+        return []
     if record.topology is None or record.trajectory is None:
-        # Contacts need the raw trajectory; silently skip records that lack it
-        # so a manifest can mix contact-enabled and orientation-only systems.
-        return None
+        return []
 
     import MDAnalysis as mda
 
-    from rotmd.analysis.binding import contact_timeseries, count_binding_events
+    from rotmd.analysis.binding import (
+        contact_timeseries,
+        count_binding_events,
+        hbond_timeseries,
+    )
 
-    cfg = manifest.contacts
     universe = mda.Universe(str(record.topology), str(record.trajectory))
-    times, contacts = contact_timeseries(
-        universe,
-        protein_sel=cfg.get("protein_sel", "protein"),
-        lipid_sel=cfg.get("lipid_sel", "resname POPI POP2 PIP2 DMPI DOPI"),
-        cutoff=float(cfg.get("cutoff", 6.0)),
-        level=cfg.get("level", "residue"),
-    )
-    return count_binding_events(
-        contacts,
-        times,
-        threshold=float(cfg.get("threshold", 0.5)),
-        selection=cfg.get("lipid_sel", "lipid"),
-    )
+    results: list[tuple[str, Any]] = []
+
+    if manifest.contacts:
+        cfg = manifest.contacts
+        times, contacts = contact_timeseries(
+            universe,
+            protein_sel=cfg.get("protein_sel", "protein"),
+            lipid_sel=cfg.get("lipid_sel", "resname POPI POP2 PIP2 DMPI DOPI"),
+            cutoff=float(cfg.get("cutoff", 6.0)),
+            level=cfg.get("level", "residue"),
+        )
+        results.append(
+            (
+                "contacts",
+                count_binding_events(
+                    contacts,
+                    times,
+                    threshold=float(cfg.get("threshold", 0.5)),
+                    selection=cfg.get("lipid_sel", "lipid"),
+                ),
+            )
+        )
+
+    if manifest.hbonds:
+        cfg = manifest.hbonds
+        times, counts = hbond_timeseries(
+            universe,
+            sel_a=cfg.get("sel_a", "protein"),
+            sel_b=cfg.get("sel_b", "resname POPI POP2 PIP2 DMPI DOPI"),
+            d_a_cutoff=float(cfg.get("d_a_cutoff", 3.0)),
+            d_h_a_angle_cutoff=float(cfg.get("d_h_a_angle_cutoff", 150.0)),
+            hydrogens_sel=cfg.get("hydrogens_sel"),
+            acceptors_sel=cfg.get("acceptors_sel"),
+        )
+        results.append(
+            (
+                "hbonds",
+                count_binding_events(
+                    counts,
+                    times,
+                    threshold=float(cfg.get("threshold", 0.5)),
+                    selection=cfg.get("sel_b", "hbond"),
+                ),
+            )
+        )
+
+    return results
 
 
 # ==============================================================================
@@ -237,9 +294,12 @@ def build_count_table(manifest: Manifest, verbose: bool = True) -> pd.DataFrame:
 
     Each row is one (replica, coordinate, response) observation. ``response``
     is ``"crossings"`` (grid crossings), ``"direction_changes"`` (turning
-    points) or ``"binding"`` (binding/unbinding events). ``count`` is the
-    Poisson response and ``exposure`` the offset (observation time). The
-    composition ``label`` and any ``covariates`` columns are the predictors.
+    points) or ``"binding"`` (binding/unbinding events). Binding events come in
+    two flavours distinguished by ``coordinate``: ``"contacts"`` (lipid
+    proximity) and ``"hbonds"`` (directional hydrogen bonds), so the regression
+    fits a separate rate for each. ``count`` is the Poisson response and
+    ``exposure`` the offset (observation time). The composition ``label`` and
+    any ``covariates`` columns are the predictors.
 
     Args:
         manifest: A parsed :class:`Manifest`.
@@ -288,12 +348,11 @@ def build_count_table(manifest: Manifest, verbose: bool = True) -> pd.DataFrame:
                 }
             )
 
-        binding = _binding_counts_for_record(record, manifest)
-        if binding is not None:
+        for coordinate, binding in _trajectory_counts_for_record(record, manifest):
             rows.append(
                 {
                     **base,
-                    "coordinate": "contacts",
+                    "coordinate": coordinate,
                     "response": "binding",
                     "count": binding.n_binding_events + binding.n_unbinding_events,
                     "exposure": binding.exposure,
