@@ -41,43 +41,63 @@ def identify_states(observable: np.ndarray,
     Returns:
         state_trajectory: (n_frames,) integer array with state indices
                          -1 = transition region, 0,1,... = stable states
-        state_info: Dictionary with state populations and lifetimes
+        state_info: Dictionary with, per state ``i``,
+            ``state_{i}_population`` (occupancy fraction),
+            ``state_{i}_n_episodes`` (number of surviving residence episodes),
+            and ``state_{i}_mean_lifetime`` (mean episode length **in frames**;
+            multiply by the frame timestep for a physical lifetime), plus the
+            overall ``transition_fraction``.
 
     Notes:
-        - Filters out short-lived fluctuations using min_duration
-        - Useful for defining metastable basins in free energy landscape
+        - Filters out short-lived fluctuations using min_duration.
+        - Useful for defining metastable basins in a free energy landscape.
+
+    .. note::
+        The threshold ranges are expected to be **non-overlapping**. If they
+        overlap, a frame in the overlap is assigned to the last matching state
+        (later thresholds win), because assignment is sequential.
     """
-    n_frames = len(observable)
+    observable = np.asarray(observable, dtype=float)
+    n_frames = observable.size
     state_trajectory = -np.ones(n_frames, dtype=int)  # -1 = transition
 
-    # Assign frames to states based on thresholds
+    if n_frames == 0:
+        return state_trajectory, {'transition_fraction': 0.0}
+
+    # Assign frames to states based on thresholds. Sequential assignment means
+    # overlapping ranges resolve in favour of the later threshold (see note).
     for state_idx, (min_val, max_val) in enumerate(thresholds):
         mask = (observable >= min_val) & (observable <= max_val)
         state_trajectory[mask] = state_idx
 
-    # Filter short-lived states
+    # Filter short-lived states: any contiguous residence shorter than
+    # min_duration is demoted to the transition region (-1).
     for state_idx in range(len(thresholds)):
-        # Find connected regions of this state
         mask = (state_trajectory == state_idx)
         labeled, n_regions = label(mask)
-
         for region_idx in range(1, n_regions + 1):
             region_mask = (labeled == region_idx)
-            region_size = np.sum(region_mask)
-
-            # Mark as transition if too short
-            if region_size < min_duration:
+            if np.sum(region_mask) < min_duration:
                 state_trajectory[region_mask] = -1
 
-    # Compute state statistics
+    # Compute per-state statistics on the *filtered* trajectory, including the
+    # residence-time (lifetime) distribution promised by the API.
     state_info = {}
     for state_idx in range(len(thresholds)):
         mask = (state_trajectory == state_idx)
-        population = np.sum(mask) / n_frames
-        state_info[f'state_{state_idx}_population'] = population
+        state_info[f'state_{state_idx}_population'] = float(np.sum(mask) / n_frames)
 
-    transition_fraction = np.sum(state_trajectory == -1) / n_frames
-    state_info['transition_fraction'] = transition_fraction
+        labeled, n_regions = label(mask)
+        if n_regions > 0:
+            # Episode lengths are the sizes of the surviving connected regions.
+            sizes = np.bincount(labeled.ravel())[1:]  # drop the background (0) bin
+            mean_lifetime = float(np.mean(sizes))
+        else:
+            mean_lifetime = 0.0
+        state_info[f'state_{state_idx}_n_episodes'] = int(n_regions)
+        state_info[f'state_{state_idx}_mean_lifetime'] = mean_lifetime
+
+    state_info['transition_fraction'] = float(np.sum(state_trajectory == -1) / n_frames)
 
     return state_trajectory, state_info
 
@@ -124,46 +144,49 @@ def detect_transitions(state_trajectory: np.ndarray,
 
 
 def compute_reactive_flux(positions: np.ndarray,
-                         velocities: np.ndarray,
                          dividing_surface: Callable[[np.ndarray], float],
-                         threshold: float = 0.0) -> float:
-    """
-    Compute reactive flux through dividing surface.
+                         threshold: float = 0.0,
+                         dt: float = 1.0) -> float:
+    r"""
+    Forward reactive flux through the dividing surface :math:`\xi = \xi^\ddagger`.
 
-    Reactive flux: J = <δ(ξ - ξ‡) · ξ̇ · H(ξ̇)>
-    where ξ is reaction coordinate, ξ‡ is transition state value
+    Counts upward crossings of the reaction coordinate :math:`\xi(\text{positions})`
+    past ``threshold`` and divides by the total observation time, giving forward
+    crossings per unit time.
 
     Args:
-        positions: (n_frames, n_atoms, 3) atomic positions
-        velocities: (n_frames, n_atoms, 3) atomic velocities
-        dividing_surface: Function that computes ξ(positions)
-        threshold: ξ‡ value for dividing surface
+        positions: (n_frames, n_atoms, 3) atomic positions.
+        dividing_surface: Function computing :math:`\xi` from one frame's
+            positions.
+        threshold: :math:`\xi^\ddagger`, the dividing-surface value.
+        dt: Time between consecutive frames (sets the flux's time units).
 
     Returns:
-        flux: Reactive flux (forward crossings per unit time)
+        flux: Forward crossings per unit time.
 
     Notes:
-        - Only counts forward crossings (ξ̇ > 0 at ξ = ξ‡)
-        - Related to rate: k = J / P_A (flux / reactant population)
+        - The crossing test ``xi[i-1] < threshold <= xi[i]`` already selects
+          *forward* (upward) crossings, so no separate :math:`\dot\xi > 0` test
+          is needed. Velocities are intentionally **not** taken as an argument:
+          the true :math:`\dot\xi = \nabla\xi \cdot v` is unavailable from a
+          positions-only ``dividing_surface``, and finite-differencing
+          :math:`\xi` (as a previous version did) double-counts the direction
+          already encoded in the crossing test.
+        - This overlaps with :func:`rotmd.analysis.crossings.count_level_crossings`;
+          prefer that for pure crossing counts without a time normalisation.
+        - Related to the rate via ``k = flux / P_A`` (flux per reactant
+          population).
     """
+    positions = np.asarray(positions)
     n_frames = len(positions)
+    if n_frames < 2:
+        return 0.0
 
-    # Compute reaction coordinate time series
     xi = np.array([dividing_surface(positions[i]) for i in range(n_frames)])
+    forward_crossings = int(np.sum((xi[:-1] < threshold) & (xi[1:] >= threshold)))
 
-    # Compute time derivative (numerical)
-    xi_dot = np.gradient(xi)
-
-    # Count forward crossings
-    crossings = []
-    for i in range(1, n_frames):
-        # Check if crossed threshold
-        if xi[i-1] < threshold <= xi[i] and xi_dot[i] > 0:
-            crossings.append(i)
-
-    flux = len(crossings) / n_frames
-
-    return flux
+    total_time = (n_frames - 1) * dt
+    return forward_crossings / total_time if total_time > 0 else 0.0
 
 
 def transmission_coefficient(state_trajectory: np.ndarray,
@@ -171,70 +194,94 @@ def transmission_coefficient(state_trajectory: np.ndarray,
                             to_state: int,
                             transition_region: int = -1,
                             verbose: bool = True) -> Tuple[float, Dict]:
-    """
-    Compute transmission coefficient κ.
+    r"""
+    Estimate a recrossing (transmission) factor from a discrete state sequence.
 
-    κ = (actual transition rate) / (TST rate)
-    Accounts for recrossings of dividing surface.
+    We measure the **reactive fraction of barrier excursions**: each time the
+    system leaves one basin and next arrives at a basin, that excursion is
+    *reactive* if it reached the opposite basin and a *recrossing* if it fell
+    back to the basin it came from. The factor is
+
+    .. math::
+
+        \hat{\kappa} = \frac{\text{reactive excursions}}
+                            {\text{reactive} + \text{recrossing excursions}}
+        \qquad 0 \le \hat{\kappa} \le 1 .
+
+    :math:`\hat{\kappa} = 1` means every barrier attempt succeeds (no
+    recrossings); smaller values mean the system often recrosses and returns,
+    which in transition-state theory is what lowers the true rate below the TST
+    estimate.
 
     Args:
-        state_trajectory: (n_frames,) state indices
-        from_state: Reactant state index
-        to_state: Product state index
-        transition_region: Index for transition region (default -1)
-        verbose: Print analysis details
+        state_trajectory: (n_frames,) state indices from :func:`identify_states`.
+        from_state: Reactant basin index.
+        to_state: Product basin index.
+        transition_region: Label for the barrier region (``-1`` by default).
+        verbose: Print analysis details.
 
     Returns:
-        kappa: Transmission coefficient (0 < κ ≤ 1)
-        info: Dictionary with crossing statistics
+        kappa: Reactive fraction in ``[0, 1]``.
+        info: Dictionary with the reactive / recrossing excursion counts.
 
     Notes:
-        - κ = 1: no recrossings (TST exact)
-        - κ < 1: recrossings reduce rate below TST prediction
-        - Requires good statistics (many transitions)
+        This is a *discrete-trajectory recrossing diagnostic*, **not** the
+        Bennett--Chandler transmission coefficient (the plateau of the
+        reactive-flux time-correlation function). It needs no dividing surface
+        or velocities, only the coarse-grained state sequence, and its value
+        depends on how :func:`identify_states` carves the basins. Treat it as a
+        qualitative recrossing measure, not as a multiplicative correction to a
+        TST rate. Only the two basins ``from_state``/``to_state`` are followed;
+        any other stable state is treated like the barrier region.
     """
-    # Detect all transitions
-    AB_transitions = detect_transitions(state_trajectory, from_state, to_state)
-    BA_transitions = detect_transitions(state_trajectory, to_state, from_state)
+    states = np.asarray(state_trajectory)
 
-    n_AB = len(AB_transitions)
-    n_BA = len(BA_transitions)
+    n_reactive = 0
+    n_recrossing = 0
+    origin = None        # basin the current excursion departed from
+    left_basin = False   # has the system left `origin` since last arrival?
 
-    # Count barrier crossings (entries into transition region from either state)
-    barrier_crossings = 0
+    # Walk the sequence as a basin -> barrier -> basin state machine. A change
+    # of basin (directly, or after a barrier excursion) is reactive; a return
+    # to the same basin after leaving it is a recrossing.
+    for s in states:
+        if s == from_state or s == to_state:
+            if origin is None:
+                origin = int(s)
+                left_basin = False
+            elif s != origin:
+                n_reactive += 1
+                origin = int(s)
+                left_basin = False
+            elif left_basin:  # s == origin and we had left: a recrossing
+                n_recrossing += 1
+                left_basin = False
+            # else: s == origin and still resident; nothing to count
+        else:
+            # Barrier region (or any non-basin state): the system has left.
+            if origin is not None:
+                left_basin = True
 
-    for i in range(1, len(state_trajectory)):
-        prev_state = state_trajectory[i-1]
-        curr_state = state_trajectory[i]
-
-        # Count crossing if entering transition region from stable state
-        if (prev_state == from_state or prev_state == to_state) and \
-           curr_state == transition_region:
-            barrier_crossings += 1
-
-    # Transmission coefficient
-    # κ = (successful transitions) / (total barrier crossings)
-    if barrier_crossings > 0:
-        kappa = (n_AB + n_BA) / barrier_crossings
-    else:
-        kappa = 0.0
+    n_excursions = n_reactive + n_recrossing
+    kappa = n_reactive / n_excursions if n_excursions > 0 else 0.0
 
     info = {
-        'n_AB_transitions': n_AB,
-        'n_BA_transitions': n_BA,
-        'barrier_crossings': barrier_crossings,
-        'kappa': kappa
+        'n_reactive': n_reactive,
+        'n_recrossing': n_recrossing,
+        'n_excursions': n_excursions,
+        'kappa': kappa,
     }
 
     if verbose:
-        print("Transmission Coefficient Analysis")
+        print("Recrossing (transmission) factor")
         print("=" * 50)
-        print(f"State {from_state} → {to_state} transitions: {n_AB}")
-        print(f"State {to_state} → {from_state} transitions: {n_BA}")
-        print(f"Total barrier crossings: {barrier_crossings}")
-        print(f"Transmission coefficient: κ = {kappa:.3f}")
+        print(f"Reactive excursions   : {n_reactive}")
+        print(f"Recrossing excursions : {n_recrossing}")
+        print(f"Reactive fraction     : kappa_hat = {kappa:.3f}")
 
-        if kappa < 0.5:
+        if n_excursions == 0:
+            print("  → No barrier excursions observed (insufficient statistics)")
+        elif kappa < 0.5:
             print("  → Significant recrossings detected")
         elif kappa > 0.9:
             print("  → Near-TST behavior (few recrossings)")
@@ -243,71 +290,93 @@ def transmission_coefficient(state_trajectory: np.ndarray,
 
 
 def committor_probability(state_trajectory: np.ndarray,
+                         observable: np.ndarray,
                          from_state: int,
                          to_state: int,
+                         transition_region: int = -1,
                          n_bins: int = 20) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Compute committor probability p_B(ξ).
+    r"""
+    Estimate the committor probability :math:`p_B(\xi)` empirically.
 
-    p_B(ξ) = probability of reaching state B before state A,
-             starting from configuration with reaction coordinate ξ
+    :math:`p_B(\xi)` is the probability of reaching state B before state A,
+    starting from configurations whose reaction-coordinate value is
+    :math:`\xi`. We estimate it by "shooting forward": for every frame in the
+    transition region we follow the trajectory until it first reaches A or B,
+    scoring 1 if B is reached first and 0 if A is. These outcomes are then
+    averaged **within bins of the reaction coordinate** ``observable`` --- not
+    by frame index, since the committor is a function of *configuration*, not
+    of wall-clock time.
 
     Args:
-        state_trajectory: (n_frames,) state indices
-        from_state: State A index
-        to_state: State B index
-        n_bins: Number of bins for discretizing transition region
+        state_trajectory: (n_frames,) state indices from :func:`identify_states`.
+        observable: (n_frames,) the reaction-coordinate value at each frame
+            (the same series passed to :func:`identify_states`). This is what
+            the committor is resolved against.
+        from_state: State A index.
+        to_state: State B index.
+        transition_region: Label marking the barrier/transition region
+            (``-1`` by default, matching :func:`identify_states`).
+        n_bins: Number of reaction-coordinate bins.
 
     Returns:
-        bin_centers: (n_bins,) bin centers for reaction coordinate
-        p_B: (n_bins,) committor probability
+        bin_centers: (n_bins,) reaction-coordinate bin centers.
+        p_B: (n_bins,) committor estimate per bin; ``np.nan`` for empty bins.
 
     Notes:
-        - p_B = 0 in state A, p_B = 1 in state B
-        - p_B = 0.5 defines optimal transition state
-        - Requires many transitions for good statistics
+        - :math:`p_B = 0` in state A, :math:`p_B = 1` in state B; the
+          :math:`p_B = 0.5` isocommittor locates the true transition state.
+        - Frames whose forward trajectory ends in the barrier (the run finishes
+          before reaching either basin) are dropped, not scored.
+        - Requires many independent transitions for stable statistics.
     """
-    # Find all frames in transition region
-    transition_mask = (state_trajectory != from_state) & \
-                     (state_trajectory != to_state) & \
-                     (state_trajectory >= 0)  # Exclude unassigned
+    state_trajectory = np.asarray(state_trajectory)
+    observable = np.asarray(observable, dtype=float)
+    if observable.shape != state_trajectory.shape:
+        raise ValueError("observable and state_trajectory must have equal length")
 
-    transition_frames = np.where(transition_mask)[0]
+    n_frames = state_trajectory.size
 
-    # For each transition frame, determine final destination
-    committor_samples = []
+    # First basin (A or B) reached at or after each frame, found in one backward
+    # pass so the per-frame look-ahead is O(n) rather than O(n^2). Sentinel -2
+    # marks "no basin reached before the trajectory ends".
+    NONE = -2
+    next_basin = np.full(n_frames, NONE, dtype=int)
+    carry = NONE
+    for i in range(n_frames - 1, -1, -1):
+        s = state_trajectory[i]
+        if s == from_state or s == to_state:
+            carry = int(s)
+        next_basin[i] = carry
 
-    for frame in transition_frames:
-        # Look forward to see which state is reached first
-        for future_frame in range(frame + 1, len(state_trajectory)):
-            future_state = state_trajectory[future_frame]
+    # Score each transition-region frame by the basin its future first hits.
+    in_barrier = np.where(state_trajectory == transition_region)[0]
+    xi_samples = []
+    outcomes = []
+    for frame in in_barrier:
+        destination = next_basin[frame]
+        if destination == to_state:
+            outcomes.append(1.0)
+            xi_samples.append(observable[frame])
+        elif destination == from_state:
+            outcomes.append(0.0)
+            xi_samples.append(observable[frame])
+        # destination == NONE: trajectory ended in the barrier; unscored.
 
-            if future_state == to_state:
-                # Committed to B
-                committor_samples.append((frame, 1))
-                break
-            elif future_state == from_state:
-                # Returned to A
-                committor_samples.append((frame, 0))
-                break
-
-    if len(committor_samples) == 0:
-        # No statistics available
+    if not outcomes:
         return np.array([]), np.array([])
 
-    # Bin by frame index (proxy for reaction coordinate)
-    frames, commitments = zip(*committor_samples)
-    frames = np.array(frames)
-    commitments = np.array(commitments)
+    xi = np.asarray(xi_samples, dtype=float)
+    scored = np.asarray(outcomes, dtype=float)
 
-    bins = np.linspace(frames.min(), frames.max(), n_bins + 1)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    p_B = np.zeros(n_bins)
-
+    bins = np.linspace(xi.min(), xi.max(), n_bins + 1)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    p_B = np.full(n_bins, np.nan)
     for i in range(n_bins):
-        mask = (frames >= bins[i]) & (frames < bins[i+1])
-        if np.sum(mask) > 0:
-            p_B[i] = np.mean(commitments[mask])
+        # Last bin is closed on the right so the maximum xi is not dropped.
+        upper = xi <= bins[i + 1] if i == n_bins - 1 else xi < bins[i + 1]
+        mask = (xi >= bins[i]) & upper
+        if np.any(mask):
+            p_B[i] = float(np.mean(scored[mask]))
 
     return bin_centers, p_B
 
@@ -379,14 +448,19 @@ def free_energy_barrier_from_rate(k_AB: float,
         DeltaF_BA: Backward barrier (kcal/mol)
 
     Notes:
-        - Assumes Arrhenius form (valid at high barriers)
-        - Prefactor A typically ~kT/h ≈ 6 ps⁻¹ at 300K
+        - Assumes Arrhenius / Eyring form (valid at high barriers).
+        - The prefactor is the Eyring value A = kT/h ≈ 6.25 ps⁻¹ at 300 K.
     """
     kB = 0.001987204  # kcal/(mol·K)
-    h = 1.5836e-4  # ps·kcal/mol (reduced Planck constant)
+    # Planck constant in kcal·ps/mol (the Eyring/TST prefactor is kT/h, using the
+    # *full* h, not ħ). Conversion of h = 6.62607015e-34 J·s:
+    #   h · N_A / 4184 (J -> kcal/mol) · 1e12 (s -> ps) ≈ 0.095371 kcal·ps/mol,
+    # which gives kT/h ≈ 6.25 ps⁻¹ at 300 K. The previous value (1.5836e-4)
+    # was ~600x too small and inflated every barrier by ~kT·ln(600) ≈ 3.8 kcal/mol.
+    h = 0.095371  # kcal·ps/mol
 
     kT = kB * temperature
-    A = kT / h  # TST prefactor
+    A = kT / h  # Eyring prefactor (~6.25 ps⁻¹ at 300 K)
 
     # ΔF‡ = -kT ln(k/A)
     DeltaF_AB = -kT * np.log(k_AB / A) if k_AB > 0 else np.inf
@@ -402,7 +476,7 @@ if __name__ == '__main__':
     print()
     print("Example usage:")
     print()
-    print("from protein_orientation.analysis.transitions import identify_states, transmission_coefficient")
+    print("from rotmd.analysis.transitions import identify_states, transmission_coefficient")
     print()
     print("# Identify metastable states from nutation angle")
     print("states, info = identify_states(theta, thresholds=[(0, 30), (60, 90)])")
@@ -410,4 +484,4 @@ if __name__ == '__main__':
     print("# Compute transmission coefficient")
     print("kappa, stats = transmission_coefficient(states, from_state=0, to_state=1)")
     print()
-    print(f"print(f'κ = {kappa:.3f}')  # Accounts for recrossings")
+    print("print(f'kappa_hat = {kappa:.3f}')  # reactive fraction (recrossings)")
