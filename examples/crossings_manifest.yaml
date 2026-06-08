@@ -1,0 +1,59 @@
+# Example manifest for `rotmd crossings`.
+#
+# Each system is one replica trajectory tagged with its bilayer composition.
+# `npz` points at the orientation output from `rotmd extract` (needs the
+# `theta`/`phi`/`psi` angles, or `rotation_matrices` for the full-SO(3)
+# tilt/azimuth/geodesic coordinates). `topology`/`trajectory` are only needed
+# when computing protein-lipid binding contacts.
+#
+# WARNING: with only `simple` and `complex` here, `has_PIP2` and `has_CHOL`
+# never vary independently -- the regression can only estimate the combined
+# "complex vs simple" effect. Add a CHOL-without-PIP2 (or PIP2-without-CHOL)
+# composition to separate them.
+
+spacing_deg: 15.0
+coordinates: [tilt, azimuth, geodesic]   # use [theta, psi] for angle-only NPZ
+min_step_deg: 1.0                          # deadband for direction-change counts
+reference_axis: [0.0, 0.0, 1.0]            # membrane normal
+body_axis: [0.0, 0.0, 1.0]                 # protein principal axis to track
+
+# Optional binding analysis (requires topology + trajectory per system).
+contacts:
+  protein_sel: "protein"
+  lipid_sel: "resname POPI DMPI"           # phosphoinositides; adjust to your FF
+  cutoff: 6.0                              # angstrom
+  threshold: 0.5                          # >0.5 contacts == bound
+  level: residue
+
+systems:
+  - label: simple
+    replica: 1
+    npz: data/simple_r1.npz
+    covariates: {has_PIP2: 0, has_CHOL: 0}
+  - label: simple
+    replica: 2
+    npz: data/simple_r2.npz
+    covariates: {has_PIP2: 0, has_CHOL: 0}
+  - label: simple
+    replica: 3
+    npz: data/simple_r3.npz
+    covariates: {has_PIP2: 0, has_CHOL: 0}
+
+  - label: complex
+    replica: 1
+    npz: data/complex_r1.npz
+    topology: data/complex_r1.tpr
+    trajectory: data/complex_r1.xtc
+    covariates: {has_PIP2: 1, has_CHOL: 1}
+  - label: complex
+    replica: 2
+    npz: data/complex_r2.npz
+    topology: data/complex_r2.tpr
+    trajectory: data/complex_r2.xtc
+    covariates: {has_PIP2: 1, has_CHOL: 1}
+  - label: complex
+    replica: 3
+    npz: data/complex_r3.npz
+    topology: data/complex_r3.tpr
+    trajectory: data/complex_r3.xtc
+    covariates: {has_PIP2: 1, has_CHOL: 1}

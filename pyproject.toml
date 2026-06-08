@@ -29,6 +29,9 @@ pyyaml = "^6.0"
 tqdm = "^4.66"
 # Lipid analysis
 lipyds = ">=0.0.1"
+# Tabular data + Poisson GLM (scikit-learn backend with resampling inference)
+pandas = "^2.2"
+scikit-learn = "^1.4"
 
 [tool.poetry.group.gpu]
 optional = true

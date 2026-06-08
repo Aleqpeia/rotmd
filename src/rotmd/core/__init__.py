@@ -12,12 +12,10 @@ from .inertia import (
     inertia_tensor,
     principal_axes,
     principal_moments,
-    parallel_axis_theorem,
 )
 
 __all__ = [
     'inertia_tensor',
     'principal_axes',
     'principal_moments',
-    'parallel_axis_theorem',
 ]

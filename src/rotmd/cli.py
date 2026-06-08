@@ -537,6 +537,63 @@ def plumed_command():
     )
 
 
+def crossings_command():
+    """Count orientation section-crossings across systems and fit a Poisson model.
+
+    Reads a YAML manifest that tags each replica trajectory with its bilayer
+    composition, builds a tidy count table, and fits a Poisson rate model with
+    cluster-bootstrap confidence intervals and a permutation test to assess
+    whether composition changes the orientational-crossing / binding-event rate.
+    """
+    import argparse
+
+    from rotmd.analysis.composition import build_count_table, load_manifest
+    from rotmd.analysis.regression import analyze_all
+    from rotmd.io.output import save_results_json
+
+    parser = argparse.ArgumentParser(
+        prog="rotmd crossings",
+        description="Poisson regression of orientation section-crossings",
+    )
+    parser.add_argument(
+        "-m", "--manifest", required=True, help="YAML manifest of systems/replicas"
+    )
+    parser.add_argument(
+        "-o", "--out", default="crossings_results", help="Output directory"
+    )
+    parser.add_argument(
+        "--predictors",
+        nargs="+",
+        default=None,
+        help="Predictor columns (default: composition 'label')",
+    )
+    parser.add_argument(
+        "--quiet", action="store_true", help="Suppress per-model summaries"
+    )
+
+    args = parser.parse_args(sys.argv[2:])  # Skip 'rotmd crossings'
+    verbose = not args.quiet
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Loading manifest: {args.manifest}")
+    manifest = load_manifest(args.manifest)
+    print(f"  {len(manifest.systems)} systems, coordinates={manifest.coordinates}")
+
+    print("Building count table ...")
+    table = build_count_table(manifest, verbose=verbose)
+    table_path = out_dir / "counts.csv"
+    table.to_csv(table_path, index=False)
+    print(f"✓ Wrote tidy count table: {table_path}")
+
+    print("Fitting models ...")
+    reports = analyze_all(table, predictors=args.predictors, verbose=verbose)
+
+    results = {key: report.to_dict() for key, report in reports.items()}
+    save_results_json(results, str(out_dir / "glm_report.json"))
+    print(f"✓ Fitted {len(reports)} model(s); report in {out_dir / 'glm_report.json'}")
+
+
 def main():
     """CLI entry point with subcommands."""
     import argparse
@@ -567,11 +624,14 @@ def main():
 
     if subcommand == "plumed":
         plumed_command()
+    elif subcommand == "crossings":
+        crossings_command()
     elif subcommand in ["-h", "--help"]:
         parser.print_help()
         print("\nSubcommands:")
         print("  extract    Extract orientation from MD trajectory (default)")
         print("  plumed     Generate PLUMED input files")
+        print("  crossings  Poisson regression of orientation section-crossings")
         print("\nRun 'rotmd <subcommand> -h' for subcommand help")
     else:
         # Treat as old-style extract command

@@ -29,6 +29,15 @@ from .pmf import (
     free_energy_difference,
     jacobian_euler_angles,
 )
+from .crossings import (
+    CrossingCounts,
+    count_direction_changes,
+    count_grid_crossings,
+    count_orientation_crossings,
+    count_plane_crossings,
+)
+from .composition import Manifest, SystemRecord, build_count_table, load_manifest
+from .regression import GLMReport, analyze_all, analyze_counts
 
 # Membrane submodule
 from . import membrane
@@ -51,6 +60,19 @@ __all__ = [
     "compute_pmf_2d",
     "compute_pmf_6d_projection",
     "free_energy_difference",
+    # Crossings / Poisson-NB regression
+    "CrossingCounts",
+    "count_grid_crossings",
+    "count_direction_changes",
+    "count_plane_crossings",
+    "count_orientation_crossings",
+    "Manifest",
+    "SystemRecord",
+    "load_manifest",
+    "build_count_table",
+    "GLMReport",
+    "analyze_counts",
+    "analyze_all",
     # Membrane submodule
     "membrane",
 ]
