@@ -14,7 +14,6 @@ import MDAnalysis as mda
 from MDAnalysis.core.groups import AtomGroup
 import contextlib
 import os
-import freesasa
 import tempfile
 import sys
 
@@ -132,6 +131,17 @@ class HydrophobicEnergy:
             Dictionary mapping resid to SASA value
         """
 
+
+        # Imported lazily: freesasa is an optional C extension. Importing it
+        # here (before any file descriptors are opened) means a missing install
+        # never breaks `import rotmd` and leaks no resources -- SASA just
+        # degrades to empty.
+        try:
+            import freesasa
+        except ImportError:
+            print("Warning: freesasa not available, cannot calculate SASA")
+            print("  Install with: pip install freesasa")
+            return {}
 
             # Suppress freesasa warnings using both methods:
             # 1. Set freesasa verbosity to silent

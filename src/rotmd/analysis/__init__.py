@@ -39,8 +39,24 @@ from .crossings import (
 from .composition import Manifest, SystemRecord, build_count_table, load_manifest
 from .regression import GLMReport, analyze_all, analyze_counts
 
-# Membrane submodule
-from . import membrane
+# Membrane submodule (optional): it depends on the third-party `twodanalysis`
+# package, which is not a hard requirement of rotmd. Import it lazily so that a
+# missing membrane dependency does not break unrelated analysis (crossings,
+# regression, PMF, ...). Access `rotmd.analysis.membrane` triggers the real
+# ImportError with installation guidance only if someone actually uses it.
+try:
+    from . import membrane
+except ImportError as _membrane_exc:  # pragma: no cover - optional dependency
+    import warnings as _warnings
+
+    _warnings.warn(
+        "rotmd.analysis.membrane is unavailable "
+        f"({_membrane_exc}). Install its optional dependency with "
+        "'poetry add twodanalysis' (or 'pip install twodanalysis') to enable "
+        "membrane analysis.",
+        stacklevel=2,
+    )
+    membrane = None  # type: ignore[assignment]
 
 __all__ = [
     # Correlations
