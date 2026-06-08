@@ -201,3 +201,20 @@ Correctness bugs:
   the inference). Run `poetry lock && poetry install` inside the `devenv
   shell` to materialise them (the sandbox used for development has no Python
   scientific stack, so the new tests could not be executed here).
+- `observables/potential.py` requires `freesasa` (raised in
+  `HydrophobicEnergy.__init__`, used by `TotalEnergy`), but `freesasa` is not a
+  declared dependency/extra in `pyproject.toml`. Without it,
+  `compute_trajectory_energies` cannot run. Consider adding a `sasa` extra
+  and/or a graceful no-SASA fallback. (Carried over from the `extract` branch.)
+
+## Doc drift surfaced by the `extract` merge
+
+- `RUNTIME.md` (from the `extract` branch) documents a torch/jax backend
+  selector that no longer matches the merged code. The authoritative runtime is
+  `core/kernels.py` (numba/jax dispatcher) loading `core/numba_kernels.py`; the
+  PyTorch path was dropped. The doc should be rewritten to match.
+- The `extract`-branch tests in `tests/test_*.py` were written against that
+  branch's monolithic `extract()` CLI and inline-numba `kernels.py`. After this
+  merge the CLI is the `ChunkedPipeline` refactor and kernels live behind the
+  dispatcher, so some tests may target APIs that moved; run the suite and
+  reconcile.

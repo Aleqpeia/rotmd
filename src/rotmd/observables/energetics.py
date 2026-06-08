@@ -73,16 +73,15 @@ def kinetic_energy_rotational(
         - Removes COM translation first
     """
     from ..core.inertia import inertia_tensor, principal_axes
-    from .angular_momentum import compute_angular_momentum
 
-    # Remove COM translation
+    com_pos = np.average(positions, weights=masses, axis=0)
     com_vel = np.average(velocities, weights=masses, axis=0)
-    vel_relative = velocities - com_vel
+    r_rel = positions - com_pos
+    v_rel = velocities - com_vel
 
-    # Compute angular momentum
-    L = compute_angular_momentum(positions, vel_relative, masses)
+    # L = Σ m_i (r_i × v_i) about COM
+    L = np.sum(masses[:, None] * np.cross(r_rel, v_rel), axis=0)
 
-    # Compute inertia tensor
     I = inertia_tensor(positions, masses)
     moments, axes = principal_axes(I)
 
@@ -364,27 +363,3 @@ def compute_energetics_trajectory(
             print(f"  Energy drift:  {drift:.3f}%")
 
     return results
-
-
-if __name__ == '__main__':
-    # Example usage
-    print("Energetics Module")
-    print("=================")
-    print()
-    print("Example usage:")
-    print()
-    print("from protein_orientation.observables.energetics import compute_energetics_trajectory")
-    print("from protein_orientation.io.gromacs import load_gromacs_trajectory")
-    print()
-    print("# Load trajectory with velocities and forces")
-    print("traj = load_gromacs_trajectory('system.gro', 'traj.trr')")
-    print()
-    print("if traj['has_velocities']:")
-    print("    results = compute_energetics_trajectory(")
-    print("        traj['positions'],")
-    print("        traj['velocities'],")
-    print("        traj['masses'],")
-    print("        forces=traj['forces'] if traj['has_forces'] else None")
-    print("    )")
-    print()
-    print("    print(f'Mean temperature: {np.mean(results[\"T\"]):.1f} K')")

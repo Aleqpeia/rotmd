@@ -447,29 +447,3 @@ def compute_structural_trajectory(
         print(f"  End-to-end:  {np.mean(results['end_to_end']):.2f} ± {np.std(results['end_to_end']):.2f} Å")
 
     return results
-
-
-if __name__ == '__main__':
-    # Example usage
-    print("Structural Parameters Module")
-    print("============================")
-    print()
-    print("Example usage:")
-    print()
-    print("from protein_orientation.observables.structural import compute_structural_trajectory")
-    print("from protein_orientation.io.gromacs import load_gromacs_trajectory")
-    print()
-    print("# Load trajectory")
-    print("traj = load_gromacs_trajectory('system.gro', 'traj.trr')")
-    print()
-    print("# Compute structural parameters")
-    print("results = compute_structural_trajectory(")
-    print("    traj['positions'],")
-    print("    traj['masses'],")
-    print("    reference=traj['positions'][0],  # First frame as reference")
-    print("    verbose=True")
-    print(")")
-    print()
-    print("# Access results")
-    print("print(f'Mean RMSD: {np.mean(results[\"rmsd\"]):.2f} Å')")
-    print("print(f'Mean Rg: {np.mean(results[\"rg\"]):.2f} Å')")
