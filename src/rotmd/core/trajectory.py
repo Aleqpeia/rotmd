@@ -15,12 +15,13 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
-from typing import Dict, Optional, Tuple, List
 import warnings
+
+import numpy as np
 
 try:
     import MDAnalysis as mda
+
     HAS_MDANALYSIS = True
 except ImportError:
     HAS_MDANALYSIS = False
@@ -30,12 +31,14 @@ except ImportError:
 class TrajectoryData:
     """Container for trajectory data"""
 
-    def __init__(self,
-                 positions: np.ndarray,
-                 masses: np.ndarray,
-                 times: np.ndarray,
-                 velocities: Optional[np.ndarray] = None,
-                 forces: Optional[np.ndarray] = None):
+    def __init__(
+        self,
+        positions: np.ndarray,
+        masses: np.ndarray,
+        times: np.ndarray,
+        velocities: np.ndarray | None = None,
+        forces: np.ndarray | None = None,
+    ):
         """
         Initialize trajectory data container.
 
@@ -58,19 +61,23 @@ class TrajectoryData:
         self.has_forces = forces is not None
 
     def __repr__(self):
-        return (f"TrajectoryData(n_frames={self.n_frames}, n_atoms={self.n_atoms}, "
-                f"velocities={'✓' if self.has_velocities else '✗'}, "
-                f"forces={'✓' if self.has_forces else '✗'})")
+        return (
+            f"TrajectoryData(n_frames={self.n_frames}, n_atoms={self.n_atoms}, "
+            f"velocities={'✓' if self.has_velocities else '✗'}, "
+            f"forces={'✓' if self.has_forces else '✗'})"
+        )
 
 
-def load_trajectory(topology: str,
-                    trajectory: str,
-                    selection: str = "protein",
-                    start: int = 0,
-                    stop: Optional[int] = None,
-                    step: int = 1,
-                    center: bool = True,
-                    verbose: bool = True) -> TrajectoryData:
+def load_trajectory(
+    topology: str,
+    trajectory: str,
+    selection: str = "protein",
+    start: int = 0,
+    stop: int | None = None,
+    step: int = 1,
+    center: bool = True,
+    verbose: bool = True,
+) -> TrajectoryData:
     """
     Load trajectory from MDAnalysis.
 
@@ -95,7 +102,7 @@ def load_trajectory(topology: str,
         raise ImportError("MDAnalysis required. Install with: pip install MDAnalysis")
 
     if verbose:
-        print(f"Loading trajectory...")
+        print("Loading trajectory...")
         print(f"  Topology: {topology}")
         print(f"  Trajectory: {trajectory}")
         print(f"  Selection: '{selection}'")
@@ -116,20 +123,20 @@ def load_trajectory(topology: str,
         _ = atoms.velocities
         has_velocities = True
         if verbose:
-            print(f"  ✓ Velocities available")
+            print("  ✓ Velocities available")
     except (AttributeError, mda.exceptions.NoDataError):
         if verbose:
-            print(f"  ✗ Velocities NOT available")
+            print("  ✗ Velocities NOT available")
 
     has_forces = False
     try:
         _ = atoms.forces
         has_forces = True
         if verbose:
-            print(f"  ✓ Forces available")
+            print("  ✓ Forces available")
     except (AttributeError, mda.exceptions.NoDataError):
         if verbose:
-            print(f"  ✗ Forces NOT available")
+            print("  ✗ Forces NOT available")
 
     # Load data
     positions_list = []
@@ -154,9 +161,11 @@ def load_trajectory(topology: str,
 
         positions_list.append(pos)
 
+        # NOTE: do not re-initialise the accumulators here; they are seeded
+        # once before the loop. Resetting per frame would discard every frame
+        # but the last.
         if has_velocities:
             velocities_list.append(atoms.velocities.copy())
-
         if has_forces:
             forces_list.append(atoms.forces.copy())
 
@@ -171,14 +180,16 @@ def load_trajectory(topology: str,
         masses=atoms.masses.copy(),
         times=np.array(times_list),
         velocities=np.array(velocities_list) if has_velocities else None,
-        forces=np.array(forces_list) if has_forces else None
+        forces=np.array(forces_list) if has_forces else None,
     )
 
 
-def validate_trajectory(traj: TrajectoryData,
-                        require_velocities: bool = False,
-                        require_forces: bool = False,
-                        verbose: bool = True) -> bool:
+def validate_trajectory(
+    traj: TrajectoryData,
+    require_velocities: bool = False,
+    require_forces: bool = False,
+    verbose: bool = True,
+) -> bool:
     """
     Validate trajectory data for analysis.
 
@@ -216,14 +227,14 @@ def validate_trajectory(traj: TrajectoryData,
     if np.any(np.isnan(traj.positions)):
         raise ValueError("NaN values found in positions")
 
-    if traj.has_velocities and np.any(np.isnan(traj.velocities)):
+    if traj.has_velocities and np.any(np.isnan(traj.velocities)):  # pyright: ignore[reportCallIssue]
         raise ValueError("NaN values found in velocities")
 
     if traj.has_forces and np.any(np.isnan(traj.forces)):
         raise ValueError("NaN values found in forces")
 
     if verbose:
-        print(f"  ✓ Trajectory valid")
+        print("  ✓ Trajectory valid")
         print(f"    Frames: {traj.n_frames}")
         print(f"    Atoms: {traj.n_atoms}")
         print(f"    Time range: {traj.times[0]:.1f} - {traj.times[-1]:.1f} ps")
@@ -231,7 +242,7 @@ def validate_trajectory(traj: TrajectoryData,
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
     print("Trajectory I/O Module")
     print("=====================")

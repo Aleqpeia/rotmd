@@ -15,12 +15,14 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
+from numpy.typing import NDArray
+
+
 import numpy as np
-from typing import Tuple, Optional
 from scipy.spatial.transform import Rotation
 
 
-def rotation_matrix_to_euler_zyz(R: np.ndarray) -> Tuple[float, float, float]:
+def rotation_matrix_to_euler_zyz(R: np.ndarray) -> tuple[float, float, float]:
     """
     Convert rotation matrix to Euler angles using ZYZ convention.
 
@@ -81,9 +83,7 @@ def euler_zyz_to_rotation_matrix(phi: float, theta: float, psi: float) -> np.nda
         R: (3, 3) rotation matrix
     """
     # Individual rotation matrices
-    Rz_phi = np.array(
-        [[np.cos(phi), -np.sin(phi), 0], [np.sin(phi), np.cos(phi), 0], [0, 0, 1]]
-    )
+    Rz_phi = np.array([[np.cos(phi), -np.sin(phi), 0], [np.sin(phi), np.cos(phi), 0], [0, 0, 1]])
 
     Ry_theta = np.array(
         [
@@ -93,9 +93,7 @@ def euler_zyz_to_rotation_matrix(phi: float, theta: float, psi: float) -> np.nda
         ]
     )
 
-    Rz_psi = np.array(
-        [[np.cos(psi), -np.sin(psi), 0], [np.sin(psi), np.cos(psi), 0], [0, 0, 1]]
-    )
+    Rz_psi = np.array([[np.cos(psi), -np.sin(psi), 0], [np.sin(psi), np.cos(psi), 0], [0, 0, 1]])
 
     # R = Rz(φ) Ry(θ) Rz(ψ)
     return Rz_phi @ Ry_theta @ Rz_psi
@@ -138,7 +136,7 @@ def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
 def extract_orientation(
     positions: np.ndarray,
     masses: np.ndarray,
-    reference_frame: Optional[np.ndarray] = None,
+    reference_frame: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Extract Euler angles trajectory from atomic positions.
@@ -183,8 +181,8 @@ def extract_orientation(
 def extract_orientation_trajectory(
     positions: np.ndarray,
     masses: np.ndarray,
-    reference_frame: Optional[np.ndarray] = None,
-) -> np.ndarray:
+    reference_frame: np.ndarray | None = None,
+) -> tuple[NDArray, NDArray]:
     """
     Extract Euler angles trajectory from atomic positions.
 
@@ -255,6 +253,8 @@ def extract_orientation_trajectory(
         euler_angles[i] = [phi, theta, psi]
         rotation_matrix[i] = R
 
+    # Order matches the docstring/examples and every caller (cli.py):
+    # (euler_angles, rotation_matrix).
     return euler_angles, rotation_matrix
 
 
@@ -360,9 +360,7 @@ def compute_orientation_time_derivative(
     return derivatives
 
 
-def orientation_autocorrelation(
-    euler_angles: np.ndarray, max_lag: Optional[int] = None
-) -> np.ndarray:
+def orientation_autocorrelation(euler_angles: np.ndarray, max_lag: int | None = None) -> np.ndarray:
     """
     Compute orientational autocorrelation function.
 
@@ -402,9 +400,7 @@ if __name__ == "__main__":
     print()
     print("Example usage:")
     print()
-    print(
-        "from protein_orientation.core.orientation import extract_orientation_trajectory"
-    )
+    print("from protein_orientation.core.orientation import extract_orientation_trajectory")
     print("from protein_orientation.core.trajectory import load_trajectory")
     print()
     print("# Load trajectory")

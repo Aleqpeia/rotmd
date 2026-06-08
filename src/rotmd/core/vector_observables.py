@@ -7,8 +7,8 @@ This module provides a common abstraction for all 3D vector observables:
 - Torque (τ)
 - Forces (F)
 
-Now supports multiple computational backends (Numba/PyTorch/JAX) for flexible
-performance optimization on different hardware.
+Kernels are dispatched through :mod:`rotmd.core.kernels`, so the same code
+runs on whichever backend is active.
 
 Key Abstractions:
 -----------------
@@ -18,8 +18,8 @@ Key Abstractions:
 
 Backend Selection:
 - Default: Numba (CPU-optimized)
-- Optional: PyTorch (GPU), JAX (TPU/GPU)
-- Automatically uses best available backend
+- Planned: JAX (GPU/TPU)
+- Automatically uses the best available backend
 
 Author: Mykyta Bobylyow
 Date: 2025
