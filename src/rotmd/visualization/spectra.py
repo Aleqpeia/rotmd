@@ -15,16 +15,11 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
-from typing import Optional, Tuple, List, Dict
 import warnings
+from typing import Dict, Optional, Tuple
 
-try:
-    import matplotlib.pyplot as plt
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-    warnings.warn("Matplotlib not available")
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 def plot_autocorrelation(times: np.ndarray,
@@ -32,7 +27,8 @@ def plot_autocorrelation(times: np.ndarray,
                         label: str = 'ACF',
                         fit_exponential: bool = True,
                         figsize: Tuple[float, float] = (10, 6),
-                        save_path: Optional[str] = None) -> Optional[float]:
+                        ax: Optional[plt.Axes] = None,
+                        save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot autocorrelation function.
 
@@ -40,20 +36,21 @@ def plot_autocorrelation(times: np.ndarray,
         times: (n_lags,) lag times in ps
         acf: (n_lags,) autocorrelation values
         label: Label for plot
-        fit_exponential: Fit exponential decay to extract τ
-        figsize: Figure size
-        save_path: Optional save path
+        fit_exponential: Fit exponential decay (drawn on the plot)
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
 
     Returns:
-        tau: Relaxation time if fit_exponential=True, else None
+        ``(fig, ax)`` so the caller can further customise, show, or save.
 
     Example:
-        >>> tau = plot_autocorrelation(lag_times, acf, label='C_L(t)')
+        >>> fig, ax = plot_autocorrelation(lag_times, acf, label='C_L(t)')
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     ax.plot(times, acf, 'b-', linewidth=2, label=label)
 
@@ -90,29 +87,30 @@ def plot_autocorrelation(times: np.ndarray,
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
-
-    return tau
+    return fig, ax
 
 
 def plot_multiple_acfs(times: np.ndarray,
                       acfs: Dict[str, np.ndarray],
                       figsize: Tuple[float, float] = (10, 6),
-                      save_path: Optional[str] = None) -> None:
+                      ax: Optional[plt.Axes] = None,
+                      save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot multiple autocorrelation functions for comparison.
 
     Args:
         times: (n_lags,) lag times
         acfs: Dictionary of {label: acf_array}
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
         >>> acfs = {
@@ -120,12 +118,12 @@ def plot_multiple_acfs(times: np.ndarray,
         ...     'C_Ly': acf_y,
         ...     'C_Lz': acf_z
         ... }
-        >>> plot_multiple_acfs(lag_times, acfs)
+        >>> fig, ax = plot_multiple_acfs(lag_times, acfs)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     colors = plt.cm.tab10(np.linspace(0, 1, len(acfs)))
 
@@ -139,13 +137,11 @@ def plot_multiple_acfs(times: np.ndarray,
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_power_spectrum(times: np.ndarray,
@@ -153,7 +149,8 @@ def plot_power_spectrum(times: np.ndarray,
                        max_freq: Optional[float] = None,
                        log_scale: bool = True,
                        figsize: Tuple[float, float] = (10, 6),
-                       save_path: Optional[str] = None) -> None:
+                       ax: Optional[plt.Axes] = None,
+                       save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot power spectrum (FFT) of time series.
 
@@ -162,15 +159,16 @@ def plot_power_spectrum(times: np.ndarray,
         signal: (n_frames,) signal values
         max_freq: Maximum frequency to plot (1/ps)
         log_scale: Use log scale for power
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_power_spectrum(times, L_mag, max_freq=1.0)
+        >>> fig, ax = plot_power_spectrum(times, L_mag, max_freq=1.0)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
     # Compute FFT
     dt = times[1] - times[0]
     n = len(signal)
@@ -194,7 +192,10 @@ def plot_power_spectrum(times: np.ndarray,
         freqs = freqs[freq_mask]
         power = power[freq_mask]
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     if log_scale:
         ax.semilogy(freqs, power, 'b-', linewidth=1.5)
@@ -207,20 +208,19 @@ def plot_power_spectrum(times: np.ndarray,
     ax.set_title('Power Spectrum', fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_spectral_density(times: np.ndarray,
                          acf: np.ndarray,
                          max_freq: Optional[float] = None,
                          figsize: Tuple[float, float] = (10, 6),
-                         save_path: Optional[str] = None) -> None:
+                         ax: Optional[plt.Axes] = None,
+                         save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot spectral density from autocorrelation function.
 
@@ -230,15 +230,16 @@ def plot_spectral_density(times: np.ndarray,
         times: (n_lags,) lag times
         acf: (n_lags,) autocorrelation
         max_freq: Maximum frequency to plot
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_spectral_density(lag_times, acf)
+        >>> fig, ax = plot_spectral_density(lag_times, acf)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
     # Fourier transform of ACF
     dt = times[1] - times[0]
     n = len(acf)
@@ -257,7 +258,10 @@ def plot_spectral_density(times: np.ndarray,
         freqs = freqs[freq_mask]
         spectral_density = spectral_density[freq_mask]
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     ax.plot(freqs, spectral_density, 'b-', linewidth=2)
 
@@ -266,38 +270,37 @@ def plot_spectral_density(times: np.ndarray,
     ax.set_title('Spectral Density', fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_friction_extraction(times: np.ndarray,
                             acf: np.ndarray,
                             friction: float,
                             figsize: Tuple[float, float] = (12, 5),
-                            save_path: Optional[str] = None) -> None:
+                            save_path: Optional[str] = None) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes]]:
     """
     Visualize friction coefficient extraction from ACF.
 
-    Shows ACF and its integral (cumulative friction).
+    Shows ACF and its integral (cumulative friction). This is a two-panel
+    figure, so it always creates its own figure.
 
     Args:
         times: (n_lags,) lag times
         acf: (n_lags,) autocorrelation
         friction: Extracted friction coefficient
         figsize: Figure size
-        save_path: Optional save path
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, (ax_acf, ax_integral))``.
 
     Example:
-        >>> plot_friction_extraction(lag_times, acf, gamma)
+        >>> fig, (ax1, ax2) = plot_friction_extraction(lag_times, acf, gamma)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
 
     # Left: ACF
@@ -321,13 +324,11 @@ def plot_friction_extraction(times: np.ndarray,
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, (ax1, ax2)
 
 
 def plot_correlation_comparison(lag_times: np.ndarray,
@@ -335,7 +336,8 @@ def plot_correlation_comparison(lag_times: np.ndarray,
                                 model_acf: np.ndarray,
                                 labels: Tuple[str, str] = ('MD', 'Model'),
                                 figsize: Tuple[float, float] = (10, 6),
-                                save_path: Optional[str] = None) -> None:
+                                ax: Optional[plt.Axes] = None,
+                                save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Compare autocorrelation functions from MD and model.
 
@@ -344,16 +346,20 @@ def plot_correlation_comparison(lag_times: np.ndarray,
         md_acf: (n_lags,) MD autocorrelation
         model_acf: (n_lags,) model autocorrelation
         labels: (md_label, model_label)
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_correlation_comparison(lag_times, acf_md, acf_langevin)
+        >>> fig, ax = plot_correlation_comparison(lag_times, acf_md, acf_langevin)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     ax.plot(lag_times, md_acf, 'b-', linewidth=2, label=labels[0], alpha=0.8)
     ax.plot(lag_times, model_acf, 'r--', linewidth=2, label=labels[1], alpha=0.8)
@@ -373,13 +379,11 @@ def plot_correlation_comparison(lag_times: np.ndarray,
            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
            fontsize=11)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 if __name__ == '__main__':
@@ -388,13 +392,13 @@ if __name__ == '__main__':
     print()
     print("Example usage:")
     print()
-    print("from protein_orientation.visualization.spectra import plot_autocorrelation, plot_power_spectrum")
-    print("from protein_orientation.analysis.correlations import autocorrelation_function")
+    print("from rotmd.visualization.spectra import plot_autocorrelation, plot_power_spectrum")
+    print("from rotmd.analysis.correlations import autocorrelation_function")
     print()
     print("# Compute ACF")
     print("acf = autocorrelation_function(L_mag, max_lag=1000)")
     print("lag_times = times[:len(acf)]")
     print()
     print("# Visualize")
-    print("tau = plot_autocorrelation(lag_times, acf, fit_exponential=True)")
+    print("fig, ax = plot_autocorrelation(lag_times, acf, fit_exponential=True)")
     print("plot_power_spectrum(times, L_mag)")

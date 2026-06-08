@@ -21,19 +21,11 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
-from typing import Optional, Tuple, Callable
-import warnings
+from typing import Optional, Tuple
 
-try:
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm, Normalize
-    from matplotlib.cm import ScalarMappable
-    import matplotlib.patches as mpatches
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-    warnings.warn("Matplotlib not available. Install with: pip install matplotlib")
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 
 
 def plot_phase_portrait_2d(
@@ -46,8 +38,9 @@ def plot_phase_portrait_2d(
     show_trajectory: bool = True,
     trajectory_alpha: float = 0.3,
     figsize: Tuple[float, float] = (10, 8),
+    ax: Optional[plt.Axes] = None,
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot 2D phase portrait: (angle, angular_velocity) with density.
 
@@ -63,17 +56,21 @@ def plot_phase_portrait_2d(
         gridsize: Hexbin grid resolution (higher = finer)
         show_trajectory: Overlay trajectory path
         trajectory_alpha: Transparency for trajectory
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
         >>> # Plot θ vs ω_θ phase portrait
-        >>> plot_phase_portrait_2d(theta, omega_theta, angle_label='θ')
+        >>> fig, ax = plot_phase_portrait_2d(theta, omega_theta, angle_label='θ')
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # 1. Density map (hexbin shows where trajectory spends time)
     hexbin = ax.hexbin(
@@ -87,7 +84,7 @@ def plot_phase_portrait_2d(
     )
 
     # Colorbar for density
-    cbar = plt.colorbar(hexbin, ax=ax)
+    cbar = fig.colorbar(hexbin, ax=ax)
     cbar.set_label('Density (frames)', fontsize=11)
 
     # 2. Trajectory overlay (shows time evolution)
@@ -116,13 +113,11 @@ def plot_phase_portrait_2d(
     ax.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
     ax.set_xticklabels(['0', 'π/2', 'π', '3π/2', '2π'])
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, ax
 
 
 def plot_energy_phase_space(
@@ -135,8 +130,9 @@ def plot_energy_phase_space(
     psi_bins: Optional[np.ndarray] = None,
     n_contours: int = 8,
     figsize: Tuple[float, float] = (12, 9),
+    ax: Optional[plt.Axes] = None,
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot trajectory in (θ, ψ) space overlaid on energy landscape.
 
@@ -151,16 +147,20 @@ def plot_energy_phase_space(
         theta_bins: Optional PMF bin centers for θ
         psi_bins: Optional PMF bin centers for ψ
         n_contours: Number of contour levels
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_energy_phase_space(theta, psi, Etot, pmf=pmf_data)
+        >>> fig, ax = plot_energy_phase_space(theta, psi, Etot, pmf=pmf_data)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
 
     ax.contourf(
@@ -194,7 +194,7 @@ def plot_energy_phase_space(
         linewidths=0.5,
         label='Trajectory (Time)'
     )
-    cbar_time = plt.colorbar(scatter_time, ax=ax, orientation='vertical')
+    cbar_time = fig.colorbar(scatter_time, ax=ax, orientation='vertical')
     cbar_time.set_label('Time (ps)', fontsize=11)
 
     # Overlay: slightly larger, lower alpha, energy-colored
@@ -212,7 +212,7 @@ def plot_energy_phase_space(
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("top", size="6%", pad=0.42)
-    cbar_energy = plt.colorbar(scatter_energy, cax=cax, orientation='horizontal')
+    cbar_energy = fig.colorbar(scatter_energy, cax=cax, orientation='horizontal')
     # Move the colorbar axis label to the right and reduce tick label size for aesthetics
     cbar_energy.ax.xaxis.set_label_position('top')
     cbar_energy.ax.xaxis.set_ticks_position('top')
@@ -228,13 +228,11 @@ def plot_energy_phase_space(
     ax.set_xlim(0, 360)
     ax.set_ylim(0, 180)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, ax
 
 
 def plot_L_phase_space(
@@ -245,8 +243,9 @@ def plot_L_phase_space(
     gridsize: int = 30,
     show_trajectory: bool = True,
     figsize: Tuple[float, float] = (10, 8),
+    ax: Optional[plt.Axes] = None,
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot angular momentum phase space: L_∥ vs L_⊥ with vector field.
 
@@ -260,16 +259,20 @@ def plot_L_phase_space(
         energy: Optional energy for coloring
         gridsize: Not used (kept for API compatibility)
         show_trajectory: Overlay trajectory with flow arrows
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_L_phase_space(L['L_parallel_mag'], L['L_perp_mag'], times=times)
+        >>> fig, ax = plot_L_phase_space(L['L_parallel_mag'], L['L_perp_mag'], times=times)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # 1. Compute velocity field: (dL_∥/dt, dL_⊥/dt)
     if len(L_parallel) > 1:
@@ -300,7 +303,7 @@ def plot_L_phase_space(
                 scale=None, scale_units='xy', angles='xy',
                 alpha=0.7, width=0.004, headwidth=4, headlength=5
             )
-            cbar = plt.colorbar(quiver, ax=ax)
+            cbar = fig.colorbar(quiver, ax=ax)
             cbar.set_label('Time (ps)', fontsize=11)
         elif energy is not None:
             # Color by energy
@@ -313,7 +316,7 @@ def plot_L_phase_space(
                 scale=None, scale_units='xy', angles='xy',
                 alpha=0.7, width=0.004, headwidth=4, headlength=5
             )
-            cbar = plt.colorbar(quiver, ax=ax)
+            cbar = fig.colorbar(quiver, ax=ax)
             cbar.set_label('Energy (kcal/mol)', fontsize=11)
         else:
             # Single color
@@ -348,13 +351,11 @@ def plot_L_phase_space(
     ax.set_xlim(0, max_val * 1.05)
     ax.set_ylim(0, max_val * 1.05)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, ax
 
 
 def plot_phase_portrait_with_vector_field(
@@ -367,8 +368,9 @@ def plot_phase_portrait_with_vector_field(
     n_arrows: int = 20,
     gridsize: int = 25,
     figsize: Tuple[float, float] = (12, 9),
+    ax: Optional[plt.Axes] = None,
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot phase portrait with vector field showing dynamics.
 
@@ -387,18 +389,22 @@ def plot_phase_portrait_with_vector_field(
         times: Optional timestamps
         n_arrows: Grid resolution for vector field
         gridsize: Hexbin resolution
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_phase_portrait_with_vector_field(
+        >>> fig, ax = plot_phase_portrait_with_vector_field(
         ...     theta, omega_theta, tau_theta, I_theta
         ... )
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # 1. Background density
     hexbin = ax.hexbin(
@@ -457,46 +463,48 @@ def plot_phase_portrait_with_vector_field(
     ax.set_title(f'Torque field for spin/nutation components', fontsize=15, fontweight='bold')
     ax.grid(True, alpha=0.3, linestyle='--')
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, ax
 
 
 def plot_poincare_section_improved(
     euler_angles: np.ndarray,
     angular_velocities: np.ndarray,
-    section_angles: list = [0, np.pi/2, np.pi, 3*np.pi/2],
+    section_angles: Optional[list] = None,
     tolerance: float = 0.05,
     gridsize: int = 30,
     figsize: Tuple[float, float] = (12, 10),
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, np.ndarray]:
     """
     Plot Poincaré sections with multiple crossing planes.
 
-    Records (θ, ω_θ) whenever φ crosses specified angles.
+    Records (θ, ω_θ) whenever φ crosses specified angles. This is a 2×2 panel
+    figure, so it always creates its own figure.
     Uses hexbin to show structure (periodic orbits, chaos, attractors).
 
     Args:
         euler_angles: (n_frames, 3) Euler angles (φ, θ, ψ)
         angular_velocities: (n_frames, 3) angular velocities
-        section_angles: List of φ values to take sections at
+        section_angles: List of φ values to take sections at. Defaults to
+            ``[0, π/2, π, 3π/2]`` when None.
         tolerance: Crossing detection tolerance
         gridsize: Hexbin resolution
         figsize: Figure size
-        save_path: Optional save path
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, axes)`` where ``axes`` is the flattened array of the four panels.
 
     Example:
-        >>> plot_poincare_section_improved(euler, omega)
+        >>> fig, axes = plot_poincare_section_improved(euler, omega)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
+    if section_angles is None:
+        section_angles = [0, np.pi / 2, np.pi, 3 * np.pi / 2]
 
-    n_sections = len(section_angles)
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     axes = axes.flatten()
 
@@ -533,13 +541,11 @@ def plot_poincare_section_improved(
                     fontsize=12)
         ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, axes
 
 
 def plot_multi_panel_summary(
@@ -552,9 +558,11 @@ def plot_multi_panel_summary(
     gridsize: int = 25,
     figsize: Tuple[float, float] = (16, 12),
     save_path: Optional[str] = None
-) -> None:
+) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes, plt.Axes, plt.Axes]]:
     """
     Multi-panel summary of phase space dynamics.
+
+    This composes a 2×2 grid, so it always creates its own figure.
 
     Layout:
     - Top left: (θ, ω_θ) phase portrait
@@ -571,14 +579,14 @@ def plot_multi_panel_summary(
         times: (n_frames,) timestamps
         gridsize: Hexbin resolution
         figsize: Figure size
-        save_path: Optional save path
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, (ax1, ax2, ax3, ax4))`` for the four panels.
 
     Example:
-        >>> plot_multi_panel_summary(theta, psi, omega_theta, omega_psi, Etot, times)
+        >>> fig, axes = plot_multi_panel_summary(theta, psi, omega_theta, omega_psi, Etot, times)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
 
@@ -602,7 +610,7 @@ def plot_multi_panel_summary(
     ax3 = fig.add_subplot(gs[1, 0])
     scatter = ax3.scatter(np.degrees(psi), np.degrees(theta),
                          c=times, cmap='viridis', s=5, alpha=0.6)
-    cbar3 = plt.colorbar(scatter, ax=ax3)
+    cbar3 = fig.colorbar(scatter, ax=ax3)
     cbar3.set_label('Time (ps)', fontsize=10)
     ax3.set_xlabel('ψ (degrees)', fontsize=12)
     ax3.set_ylabel('θ (degrees)', fontsize=12)
@@ -627,13 +635,12 @@ def plot_multi_panel_summary(
                label=f'Mean: {mean_E:.2f} ± {std_E:.2f} kcal/mol')
     ax4.legend(fontsize=10)
 
-    plt.suptitle('Phase Space Summary', fontsize=16, fontweight='bold', y=0.995)
+    fig.suptitle('Phase Space Summary', fontsize=16, fontweight='bold', y=0.995)
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.close()
+    return fig, (ax1, ax2, ax3, ax4)
 
 
 if __name__ == '__main__':
@@ -649,7 +656,7 @@ if __name__ == '__main__':
     print()
     print("Example usage:")
     print()
-    print("from protein_orientation.visualization.phase_space import \\")
+    print("from rotmd.visualization.phase_space import \\")
     print("    plot_phase_portrait_2d, plot_energy_phase_space, plot_L_phase_space")
     print()
     print("# 2D phase portrait with density")

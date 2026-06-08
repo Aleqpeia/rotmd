@@ -15,18 +15,10 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
-from typing import Optional, Tuple, List, Callable
-import warnings
+from typing import Callable, List, Optional, Tuple
 
-try:
-    import matplotlib.pyplot as plt
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-    warnings.warn("Matplotlib not available. Install with: pip install matplotlib")
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 def plot_pmf_heatmap(pmf_values: np.ndarray,
@@ -35,7 +27,8 @@ def plot_pmf_heatmap(pmf_values: np.ndarray,
                     vmax: Optional[float] = None,
                     mark_minima: bool = True,
                     figsize: Tuple[float, float] = (10, 8),
-                    save_path: Optional[str] = None) -> None:
+                    ax: Optional[plt.Axes] = None,
+                    save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot 2D PMF heatmap.
 
@@ -45,16 +38,20 @@ def plot_pmf_heatmap(pmf_values: np.ndarray,
         psi_bins: (n_psi,) ψ bin centers
         vmax: Maximum value for colorbar (clips high energies)
         mark_minima: Mark local minima with points
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
-        >>> plot_pmf_heatmap(pmf, theta_bins, psi_bins, vmax=10)
+        >>> fig, ax = plot_pmf_heatmap(pmf, theta_bins, psi_bins, vmax=10)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # Clip high energies for better visualization
     if vmax is None:
@@ -69,7 +66,7 @@ def plot_pmf_heatmap(pmf_values: np.ndarray,
     im = ax.pcolormesh(psi_grid, theta_grid, pmf_plot,
                        cmap='seismic', shading='auto', vmin=0, vmax=vmax)
 
-    cbar = plt.colorbar(im, ax=ax)
+    cbar = fig.colorbar(im, ax=ax)
     cbar.set_label('PMF (kcal/mol)', fontsize=12)
 
     # Mark minima
@@ -83,13 +80,11 @@ def plot_pmf_heatmap(pmf_values: np.ndarray,
     ax.set_ylabel('θ (degrees)', fontsize=12)
     ax.set_title('Potential of Mean Force', fontsize=14, fontweight='bold')
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_pmf_contour(pmf_values: np.ndarray,
@@ -98,7 +93,8 @@ def plot_pmf_contour(pmf_values: np.ndarray,
                     n_levels: int = 15,
                     vmax: Optional[float] = None,
                     figsize: Tuple[float, float] = (10, 8),
-                    save_path: Optional[str] = None) -> None:
+                    ax: Optional[plt.Axes] = None,
+                    save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot PMF as contour plot.
 
@@ -108,13 +104,17 @@ def plot_pmf_contour(pmf_values: np.ndarray,
         psi_bins: (n_psi,) ψ bin centers
         n_levels: Number of contour levels
         vmax: Maximum value for contours
-        figsize: Figure size
-        save_path: Optional save path
-    """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
 
-    fig, ax = plt.subplots(figsize=figsize)
+    Returns:
+        ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     if vmax is None:
         vmax = np.percentile(pmf_values[np.isfinite(pmf_values)], 95)
@@ -134,20 +134,18 @@ def plot_pmf_contour(pmf_values: np.ndarray,
 
     ax.clabel(contour, inline=True, fontsize=8, fmt='%.1f')
 
-    cbar = plt.colorbar(contourf, ax=ax)
+    cbar = fig.colorbar(contourf, ax=ax)
     cbar.set_label('PMF (kcal/mol)', fontsize=12)
 
     ax.set_xlabel('ψ (degrees)', fontsize=12)
     ax.set_ylabel('θ (degrees)', fontsize=12)
     ax.set_title('PMF Contour Plot', fontsize=14, fontweight='bold')
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_pmf_3d_surface(pmf_values: np.ndarray,
@@ -155,7 +153,8 @@ def plot_pmf_3d_surface(pmf_values: np.ndarray,
                         psi_bins: np.ndarray,
                         vmax: Optional[float] = None,
                         figsize: Tuple[float, float] = (12, 10),
-                        save_path: Optional[str] = None) -> None:
+                        ax: Optional[plt.Axes] = None,
+                        save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot 3D surface of PMF.
 
@@ -164,16 +163,19 @@ def plot_pmf_3d_surface(pmf_values: np.ndarray,
         theta_bins: (n_theta,) θ bins
         psi_bins: (n_psi,) ψ bins
         vmax: Maximum z value (clips high barriers)
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing 3D Axes to draw on; a new figure is created if
+            None. A provided Axes must have a 3D projection.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    from mpl_toolkits.mplot3d import Axes3D
-
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(111, projection='3d')
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+    else:
+        fig = ax.figure
 
     if vmax is None:
         vmax = np.percentile(pmf_values[np.isfinite(pmf_values)], 95)
@@ -196,13 +198,11 @@ def plot_pmf_3d_surface(pmf_values: np.ndarray,
 
     ax.view_init(elev=30, azim=45)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_torque_vector_field(torque_field: Callable,
@@ -210,7 +210,8 @@ def plot_torque_vector_field(torque_field: Callable,
                              psi_range: Tuple[float, float] = (0, 2*np.pi),
                              n_grid: int = 10,
                              figsize: Tuple[float, float] = (10, 8),
-                             save_path: Optional[str] = None) -> None:
+                             ax: Optional[plt.Axes] = None,
+                             save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot torque vector field on (θ, ψ) plane.
 
@@ -219,20 +220,24 @@ def plot_torque_vector_field(torque_field: Callable,
         theta_range: (min, max) for θ
         psi_range: (min, max) for ψ
         n_grid: Grid resolution
-        figsize: Figure size
-        save_path: Optional save path
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
+
+    Returns:
+        ``(fig, ax)``.
 
     Example:
         >>> def tau_field(theta, psi):
         ...     tau_theta = -2.0 * np.sin(2*theta)
         ...     tau_psi = 0.0
         ...     return tau_theta, tau_psi
-        >>> plot_torque_vector_field(tau_field)
+        >>> fig, ax = plot_torque_vector_field(tau_field)
     """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # Create grid
     theta = np.linspace(theta_range[0], theta_range[1], n_grid)
@@ -259,13 +264,11 @@ def plot_torque_vector_field(torque_field: Callable,
     ax.set_title('Torque ', fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.1)
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=900, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=900, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def plot_free_energy_landscape(pmf_values: np.ndarray,
@@ -273,7 +276,8 @@ def plot_free_energy_landscape(pmf_values: np.ndarray,
                                psi_bins: np.ndarray,
                                trajectory: Optional[Tuple[np.ndarray, np.ndarray]] = None,
                                figsize: Tuple[float, float] = (12, 10),
-                               save_path: Optional[str] = None) -> None:
+                               ax: Optional[plt.Axes] = None,
+                               save_path: Optional[str] = None) -> Tuple[plt.Figure, plt.Axes]:
     """
     Combined visualization: PMF + trajectory overlay.
 
@@ -282,13 +286,17 @@ def plot_free_energy_landscape(pmf_values: np.ndarray,
         theta_bins: θ bins
         psi_bins: ψ bins
         trajectory: Optional (theta_traj, psi_traj) to overlay
-        figsize: Figure size
-        save_path: Optional save path
-    """
-    if not HAS_MATPLOTLIB:
-        raise ImportError("Matplotlib required")
+        figsize: Figure size (used only when ``ax`` is None)
+        ax: Optional existing Axes to draw on; a new figure is created if None.
+        save_path: If given, the figure is written there.
 
-    fig, ax = plt.subplots(figsize=figsize)
+    Returns:
+        ``(fig, ax)``.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # PMF heatmap
     vmax = np.percentile(pmf_values[np.isfinite(pmf_values)], 95)
@@ -299,7 +307,7 @@ def plot_free_energy_landscape(pmf_values: np.ndarray,
     im = ax.pcolormesh(np.degrees(psi_grid), np.degrees(theta_grid), pmf_plot,
                        cmap='viridis', shading='auto', alpha=0.8)
 
-    cbar = plt.colorbar(im, ax=ax)
+    cbar = fig.colorbar(im, ax=ax)
     cbar.set_label('PMF (kcal/mol)', fontsize=12)
 
     # Overlay trajectory
@@ -323,13 +331,11 @@ def plot_free_energy_landscape(pmf_values: np.ndarray,
     ax.set_ylabel('θ (degrees)', fontsize=12)
     ax.set_title('Free Energy Landscape', fontsize=14, fontweight='bold')
 
-    plt.tight_layout()
-
+    fig.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Saved to {save_path}")
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    plt.show()
+    return fig, ax
 
 
 def _find_local_minima(values: np.ndarray,
@@ -367,8 +373,8 @@ if __name__ == '__main__':
     print()
     print("Example usage:")
     print()
-    print("from protein_orientation.visualization.surfaces import plot_pmf_heatmap")
-    print("from protein_orientation.analysis.pmf import compute_pmf_2d")
+    print("from rotmd.visualization.surfaces import plot_pmf_heatmap")
+    print("from rotmd.analysis.pmf import compute_pmf_2d")
     print()
     print("# Compute PMF")
     print("pmf, theta_bins, psi_bins = compute_pmf_2d(euler_trajectory)")
