@@ -1,18 +1,101 @@
-__pycache__
+# =============================================================================
+# .dockerignore for rotmd
+#
+# Only what the build actually needs is included:
+#   pyproject.toml, poetry.lock, README.md (read by poetry-core at build),
+#   src/ (the package source).
+#
+# Everything else is excluded — especially large data files and directories
+# that would bloat the build context sent to the Docker daemon.
+# =============================================================================
+
+# --- Git and VCS ---
+.git
+.gitignore
+.gitattributes
+
+# --- MD trajectory / simulation data (potentially terabytes) ---
+*.trr
+*.xtc
+*.gro
+*.tpr
+*.pdb
+*.edr
+*.log
+*.cpt
+*.ndx
+*.mdp
+*.dat
+*.itp
+*.top
+*.gsd
+
+# --- Output data ---
+*.npz
+*_offsets.npz
+*.npz_offsets
+wtresults/
+examples/
+
+# --- Notebooks and presentations ---
+notebooks/
+presentation/
+
+# --- Documentation build artifacts ---
+site/
+docs/_build/
+
+# --- Python caches and build artifacts ---
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.so
 *.o
 *.a
-.git
-.gitignore
-conda.build/
-venv/
-.env
 *.egg-info/
+*.egg
 build/
 dist/
-site/
-node_modules/
-.DS_Store 
+.eggs/
+
+# --- Virtual environments ---
+.venv/
+venv/
+.devenv/
+.direnv/
+
+# --- Dev environment configs (Nix, etc.) ---
+devenv.nix
+devenv.yaml
+devenv.lock
+.devenv/
+
+# --- IDE and editor files ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- CI / container tooling (not needed inside image) ---
+.devcontainer/
+.github/
+CONTAINER.md
+AGENTS.md
+RUNTIME.md
+SESSION.md
+MDARCHIVE_ARCHITECTURE.md
+# NOTE: README.md is intentionally NOT excluded here.
+# pyproject.toml declares `readme = "README.md"` and poetry-core reads it
+# at build time. The Dockerfile COPY includes it explicitly.
+
+# --- Scripts (SLURM job scripts, not part of the Python package) ---
+scripts/
+
+# --- Miscellaneous ---
+compose.yml
+plumed.dat
+*.local.json
+agent-memory/
+agents/

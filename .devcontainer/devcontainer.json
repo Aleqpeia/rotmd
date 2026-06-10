@@ -1,0 +1,119 @@
+{
+  // VS Code Dev Containers configuration for rotmd
+  //
+  // Uses the "dev" stage of the main Dockerfile so the dev container and
+  // production image share the same base + runtime deps and diverge only
+  // in the extra dev toolchain (pytest, ruff, mypy, pre-commit, ipython).
+  //
+  // Prerequisites on the host:
+  //   - Docker Desktop (or Docker Engine) running
+  //   - VS Code with the "Dev Containers" extension installed
+  //
+  // Open this repo in VS Code and choose
+  //   "Dev Containers: Reopen in Container"
+  "name": "rotmd dev",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    // Build the "dev" multi-stage target, not the default "runtime" target.
+    // Python 3.12 and Poetry 2.3.4 are hardcoded in the Dockerfile.
+    "target": "dev",
+    "context": ".."
+  },
+  // Mount the project source at /workspace so edits on the host are
+  // immediately visible inside the container.  The dev stage installs the
+  // package at build time, but the live source mount shadows it — changes
+  // to src/ are reflected without rebuilding.
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+  // overrideCommand: true (the default) lets VS Code inject a keep-alive
+  // process so the container stays up while you're working.  Omitting this
+  // key (or setting it to true) is correct here; setting it to false would
+  // cause the container to exit immediately since /bin/bash has no TTY.
+
+  // Re-run after workspace mount so any pyproject.toml changes on the host
+  // are picked up.  Editable install is fine here — /workspace/src is mounted
+  // and live, so the .pth pointer is valid for the whole dev session.
+  "postCreateCommand": "poetry install --with dev --no-interaction",
+  // ── VS Code settings inside the container ────────────────────────────────
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.mypy-type-checker",
+        "charliermarsh.ruff",
+        "ms-python.debugpy",
+        "njpwerner.autodocstring",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        // Python interpreter — poetry installs into the system Python (no
+        // venv) so the interpreter is the system python3.
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        // Ruff as the primary linter and formatter.
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+          }
+        },
+        "ruff.path": [
+          "/usr/local/bin/ruff"
+        ],
+        // mypy settings — mirrors pyproject.toml [tool.mypy] block.
+        "mypy-type-checker.path": [
+          "/usr/local/bin/mypy"
+        ],
+        "mypy-type-checker.args": [
+          "--config-file=pyproject.toml"
+        ],
+        // Test discovery
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+          "tests",
+          "-x",
+          "--tb=short",
+          "-q"
+        ],
+        "python.testing.unittestEnabled": false,
+        // Source root so imports resolve
+        "python.analysis.extraPaths": [
+          "src"
+        ],
+        // Show rulers at the project line-length
+        "editor.rulers": [
+          100
+        ],
+        // Numba JIT is slow on first call inside tests; bump test timeout
+        "python.testing.pytestPath": "/usr/local/bin/pytest",
+        // Suppress false-positive MDAnalysis import warnings (no stubs)
+        "python.analysis.diagnosticSeverityOverrides": {
+          "reportMissingModuleSource": "none"
+        },
+        // Thread counts: leave at 1 for interactive dev to avoid spinning
+        // up all cores; override per run when profiling.
+        "terminal.integrated.env.linux": {
+          "NUMBA_NUM_THREADS": "2",
+          "OMP_NUM_THREADS": "2",
+          "OPENBLAS_NUM_THREADS": "2"
+        }
+      }
+    }
+  },
+  // ── Environment variables ─────────────────────────────────────────────────
+  // ROTMD_NUMBA=0 disables JIT compilation (pure-numpy fallback) for faster
+  // import in test runs that don't exercise the numba kernels.  Remove or
+  // set to 1 when profiling/benchmarking numba code paths.
+  "containerEnv": {
+    "ROTMD_NUMBA": "0",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  // Run as root in the dev container (avoids file-permission headaches with
+  // bind-mounted sources on Linux hosts where UID may differ).
+  "remoteUser": "root"
+
+  // ── Forwarded ports ───────────────────────────────────────────────────────
+  // Uncomment when using the jupyter group (`poetry install --with jupyter`):
+  // "forwardPorts": [8888]
+}
