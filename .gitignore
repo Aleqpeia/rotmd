@@ -3,6 +3,10 @@
 devenv.local.nix
 
 # direnv
+RUNTIME.md
+AGENTS.md
+SESSION.md
+MDARCHIVE_ARCHITECTURE.md
 .direnv
 **/target
 .devenv

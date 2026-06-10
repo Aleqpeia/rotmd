@@ -15,11 +15,12 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
 import json
-from pathlib import Path
-from typing import Dict, Any, Optional, Union
 import warnings
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+import numpy as np
 
 
 def save_results_json(results: Dict[str, Any],
@@ -384,22 +385,76 @@ def export_to_csv(data: Dict[str, np.ndarray],
     print(f"✓ Exported to {filename}")
 
 
-if __name__ == '__main__':
-    # Example usage
-    print("Output Handling Module")
-    print("======================")
-    print()
-    print("Example usage:")
-    print()
-    print("from protein_orientation.io.output import save_results_json, save_results_npz")
-    print()
-    print("# Save analysis results")
-    print("results = {'D': 0.123, 'friction': 45.6, 'kappa': 0.75}")
-    print("save_results_json(results, 'analysis.json')")
-    print()
-    print("# Save trajectory data")
-    print("traj_data = {'euler': euler_angles, 'times': times}")
-    print("save_results_npz(traj_data, 'trajectories.npz', compress=True)")
-    print()
-    print("# Load back")
-    print("loaded = load_results_npz('trajectories.npz')")
+# ---------------------------------------------------------------------------
+# NPZ chunk I/O  (used by the `rotmd extract` / `rotmd merge` CLI)
+# ---------------------------------------------------------------------------
+
+
+def save_npz(path: str | Path, data: dict[str, np.ndarray]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **data)
+    return path
+
+
+def load_npz(path: str | Path) -> dict[str, np.ndarray]:
+    with np.load(path) as f:
+        return {k: f[k] for k in f.files}
+
+
+def merge_npz(inputs: list[Path], output: Path) -> Path:
+    if not inputs:
+        raise ValueError("at least one input chunk required")
+
+    chunks = [load_npz(p) for p in inputs]
+
+    # Every chunk must have time_ps.
+    for c, p in zip(chunks, inputs):
+        if "time_ps" not in c:
+            raise ValueError(f"{p} has no time_ps")
+
+    # All chunks must share the same set of keys.
+    ref_keys = set(chunks[0])
+    for c, p in zip(chunks, inputs):
+        if set(c) != ref_keys:
+            missing = ref_keys - set(c)
+            extra = set(c) - ref_keys
+            parts = []
+            if missing:
+                parts.append(f"missing: {sorted(missing)}")
+            if extra:
+                parts.append(f"extra: {sorted(extra)}")
+            raise ValueError(f"key mismatch with {p}: {'; '.join(parts)}")
+
+    # Determine which keys are time-varying (first dim matches time_ps length).
+    def _is_time_varying(arr: np.ndarray, n: int) -> bool:
+        return arr.ndim >= 1 and arr.shape[0] == n
+
+    # Detect time-invariant keys from the first chunk.
+    n0 = len(chunks[0]["time_ps"])
+    invariant_keys = {
+        k for k in ref_keys if k != "time_ps" and not _is_time_varying(chunks[0][k], n0)
+    }
+
+    # Check time monotonicity across chunks.
+    all_t = np.concatenate([c["time_ps"] for c in chunks])
+    if np.any(np.diff(all_t) <= 0):
+        raise ValueError("time_ps is not strictly monotonic across chunks")
+
+    # Check invariant arrays are consistent across chunks.
+    for k in invariant_keys:
+        ref = chunks[0][k]
+        for c in chunks[1:]:
+            if c[k].shape != ref.shape or not np.allclose(c[k], ref):
+                raise ValueError(
+                    f"time-invariant key {k} differs between chunks"
+                )
+
+    # Concatenate time-varying arrays.
+    merged: dict[str, np.ndarray] = {"time_ps": all_t}
+    for k in (ref_keys - {"time_ps"} - invariant_keys):
+        merged[k] = np.concatenate([c[k] for c in chunks], axis=0)
+    for k in invariant_keys:
+        merged[k] = chunks[0][k].copy()
+
+    return save_npz(output, merged)

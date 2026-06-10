@@ -12,7 +12,7 @@ readme = "README.md"
 packages = [{ include = "rotmd", from = "src" }]
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.10,<3.14"
 numpy = "^2.0.0"
 scipy = "^1.11"
 MDAnalysis = "^2.6.0"
@@ -27,15 +27,14 @@ rich = "^13.0"
 pydantic = "^2.5"
 pyyaml = "^6.0"
 tqdm = "^4.66"
-# Lipid analysis
-lipyds = ">=0.0.1"
 
-[tool.poetry.group.gpu]
-optional = true
-
-[tool.poetry.group.gpu.dependencies]
-# PyTorch for GPU acceleration (optional, for CUDA/HPC systems)
-torch = "^2.1.0"
+# [tool.poetry.group.gpu]
+# optional = true
+#
+# [tool.poetry.group.gpu.dependencies]
+# # PyTorch for GPU acceleration (optional, for CUDA/HPC systems)
+# torch = "^2.1.0"
+freesasa = "^2.2.1"
 
 [tool.poetry.group.dev]
 optional = true

@@ -8,36 +8,70 @@ This module implements energy calculations for protein-membrane interactions:
 - Per-residue energy contributions for mutation analysis
 """
 
-from typing import Dict, List, Optional, Tuple
-import numpy as np
-import MDAnalysis as mda
-from MDAnalysis.core.groups import AtomGroup
-import contextlib
 import os
-import freesasa
-import tempfile
 import sys
+import tempfile
+
+import MDAnalysis as mda
+import freesasa
+import numpy as np
 
 # Kyte-Doolittle hydrophobicity scale
 HYDROPHOBICITY_SCALE = {
-    'ALA': 1.8, 'ARG': -4.5, 'ASN': -3.5, 'ASP': -3.5, 'CYS': 2.5,
-    'GLN': -3.5, 'GLU': -3.5, 'GLY': -0.4, 'HIS': -3.2, 'ILE': 4.5,
-    'LEU': 3.8, 'LYS': -3.9, 'MET': 1.9, 'PHE': 2.8, 'PRO': -1.6,
-    'SER': -0.8, 'THR': -0.7, 'TRP': -0.9, 'TYR': -1.3, 'VAL': 4.2,
+    "ALA": 1.8,
+    "ARG": -4.5,
+    "ASN": -3.5,
+    "ASP": -3.5,
+    "CYS": 2.5,
+    "GLN": -3.5,
+    "GLU": -3.5,
+    "GLY": -0.4,
+    "HIS": -3.2,
+    "ILE": 4.5,
+    "LEU": 3.8,
+    "LYS": -3.9,
+    "MET": 1.9,
+    "PHE": 2.8,
+    "PRO": -1.6,
+    "SER": -0.8,
+    "THR": -0.7,
+    "TRP": -0.9,
+    "TYR": -1.3,
+    "VAL": 4.2,
     # Additional residue names
-    'HSD': -3.2, 'HSE': -3.2, 'HSP': -3.2,  # Histidine variants
-    'GLYM': -0.4,  # N-myristoylated glycine
+    "HSD": -3.2,
+    "HSE": -3.2,
+    "HSP": -3.2,  # Histidine variants
+    "GLYM": -0.4,  # N-myristoylated glycine
 }
 
 # Formal charges at physiological pH
 RESIDUE_CHARGES = {
-    'ARG': +1.0, 'LYS': +1.0, 'HIS': +0.5, 'ASP': -1.0, 'GLU': -1.0,
-    'HSD': 0.0, 'HSE': 0.0, 'HSP': +1.0,
+    "ARG": +1.0,
+    "LYS": +1.0,
+    "HIS": +0.5,
+    "ASP": -1.0,
+    "GLU": -1.0,
+    "HSD": 0.0,
+    "HSE": 0.0,
+    "HSP": +1.0,
     # Neutral residues
-    'ALA': 0.0, 'ASN': 0.0, 'CYS': 0.0, 'GLN': 0.0, 'GLY': 0.0,
-    'ILE': 0.0, 'LEU': 0.0, 'MET': 0.0, 'PHE': 0.0, 'PRO': 0.0,
-    'SER': 0.0, 'THR': 0.0, 'TRP': 0.0, 'TYR': 0.0, 'VAL': 0.0,
-    'GLYM': 0.0,
+    "ALA": 0.0,
+    "ASN": 0.0,
+    "CYS": 0.0,
+    "GLN": 0.0,
+    "GLY": 0.0,
+    "ILE": 0.0,
+    "LEU": 0.0,
+    "MET": 0.0,
+    "PHE": 0.0,
+    "PRO": 0.0,
+    "SER": 0.0,
+    "THR": 0.0,
+    "TRP": 0.0,
+    "TYR": 0.0,
+    "VAL": 0.0,
+    "GLYM": 0.0,
 }
 
 
@@ -49,11 +83,7 @@ class HydrophobicEnergy:
     residues. This is a simplified model based on residue-level SASA.
     """
 
-    def __init__(
-        self,
-        reference_sasa: Optional[Dict[str, float]] = None,
-        scale_factor: float = 0.01
-    ):
+    def __init__(self, reference_sasa: dict[str, float] | None = None, scale_factor: float = 0.01):
         """
         Initialize hydrophobic energy calculator.
 
@@ -66,16 +96,30 @@ class HydrophobicEnergy:
 
         # Approximate reference SASA values for fully exposed residues (Å²)
         self.reference_sasa = reference_sasa or {
-            'ALA': 113, 'ARG': 241, 'ASN': 158, 'ASP': 151, 'CYS': 140,
-            'GLN': 189, 'GLU': 183, 'GLY': 85, 'HIS': 194, 'ILE': 182,
-            'LEU': 180, 'LYS': 211, 'MET': 204, 'PHE': 218, 'PRO': 143,
-            'SER': 122, 'THR': 146, 'TRP': 259, 'TYR': 229, 'VAL': 160,
+            "ALA": 113,
+            "ARG": 241,
+            "ASN": 158,
+            "ASP": 151,
+            "CYS": 140,
+            "GLN": 189,
+            "GLU": 183,
+            "GLY": 85,
+            "HIS": 194,
+            "ILE": 182,
+            "LEU": 180,
+            "LYS": 211,
+            "MET": 204,
+            "PHE": 218,
+            "PRO": 143,
+            "SER": 122,
+            "THR": 146,
+            "TRP": 259,
+            "TYR": 229,
+            "VAL": 160,
         }
 
     def calculate_residue_burial(
-        self,
-        residue: mda.core.groups.Residue,
-        current_sasa: float
+            self, residue: mda.core.groups.Residue, current_sasa: float
     ) -> float:
         """
         Calculate burial fraction for a residue.
@@ -92,9 +136,7 @@ class HydrophobicEnergy:
         return max(0.0, burial)
 
     def calculate_residue_energy(
-        self,
-        residue: mda.core.groups.Residue,
-        burial_fraction: float
+            self, residue: mda.core.groups.Residue, burial_fraction: float
     ) -> float:
         """
         Calculate hydrophobic energy for a residue.
@@ -118,10 +160,7 @@ class HydrophobicEnergy:
 
         return energy
 
-    def calculate_per_residue_sasa(
-        self,
-        protein_atoms: AtomGroup
-    ) -> Dict[int, float]:
+    def calculate_per_residue_sasa(self, protein_atoms: AtomGroup) -> dict[int, float]:
         """
         Calculate SASA for each residue.
 
@@ -132,24 +171,23 @@ class HydrophobicEnergy:
             Dictionary mapping resid to SASA value
         """
 
-
-            # Suppress freesasa warnings using both methods:
-            # 1. Set freesasa verbosity to silent
-            # 2. Redirect stderr at file descriptor level (works for C libraries)
-            # Save original stderr file descriptor by duplicating it
+        # Suppress freesasa warnings using both methods:
+        # 1. Set freesasa verbosity to silent
+        # 2. Redirect stderr at file descriptor level (works for C libraries)
+        # Save original stderr file descriptor by duplicating it
         original_stderr_fd = sys.stderr.fileno()
         saved_stderr_fd = os.dup(original_stderr_fd)
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
-            
+
         try:
             # Set freesasa to silent mode
             freesasa.setVerbosity(freesasa.silent)
-            
+
             # Redirect stderr at file descriptor level (lower level than contextlib)
             os.dup2(devnull_fd, original_stderr_fd)
-            
+
             # Write atoms to temporary PDB file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.pdb', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False) as tmp:
                 tmp_pdb = tmp.name
                 # Simple PDB write - MDAnalysis handles format
                 protein_atoms.write(tmp_pdb)
@@ -199,7 +237,6 @@ class HydrophobicEnergy:
 
             return residue_sasa
 
-
         except ImportError:
             print("Warning: freesasa not available, cannot calculate SASA")
             print("  Install with: pip install freesasa")
@@ -212,10 +249,8 @@ class HydrophobicEnergy:
             return {}
 
     def calculate_total_energy(
-        self,
-        protein_atoms: AtomGroup,
-        residue_sasa: Optional[Dict[int, float]] = None
-    ) -> Tuple[float, Dict[int, float]]:
+            self, protein_atoms: AtomGroup, residue_sasa: dict[int, float] | None = None
+    ) -> tuple[float, dict[int, float]]:
         """
         Calculate total hydrophobic energy and per-residue contributions.
 
@@ -258,7 +293,7 @@ class ElectrostaticEnergy:
         membrane_surface_potential: float = -10.0,  # mV
         dielectric_constant: float = 80.0,
         distance_cutoff: float = 15.0,  # Angstroms
-        temperature: float = 310.15  # Kelvin
+            temperature: float = 310.15,  # Kelvin
     ):
         """
         Initialize electrostatic energy calculator.
@@ -294,11 +329,8 @@ class ElectrostaticEnergy:
         return RESIDUE_CHARGES.get(residue.resname, 0.0)
 
     def calculate_membrane_interaction_energy(
-        self,
-        protein_atoms: AtomGroup,
-        membrane_center_z: float,
-        protein_com_z: float
-    ) -> Tuple[float, Dict[int, float]]:
+            self, protein_atoms: AtomGroup, membrane_center_z: float, protein_com_z: float
+    ) -> tuple[float, dict[int, float]]:
         """
         Calculate electrostatic interaction with membrane surface.
 
@@ -348,7 +380,7 @@ class ElectrostaticEnergy:
             # Energy from interaction with surface potential
             # Simplified: E = q * ΔV * screening_factor
             energy = charge * self.membrane_potential * screening * 23.06  # Convert to kcal/mol
-            energy /= (epsilon_r / 80.0)  # Scale by dielectric
+            energy /= epsilon_r / 80.0  # Scale by dielectric
 
             per_residue_energy[int(residue.resid)] = energy
             total_energy += energy
@@ -356,9 +388,8 @@ class ElectrostaticEnergy:
         return total_energy, per_residue_energy
 
     def calculate_protein_self_energy(
-        self,
-        protein_atoms: AtomGroup
-    ) -> Tuple[float, Dict[int, float]]:
+            self, protein_atoms: AtomGroup
+    ) -> tuple[float, dict[int, float]]:
         """
         Calculate electrostatic self-energy of protein (simplified).
 
@@ -383,7 +414,7 @@ class ElectrostaticEnergy:
 
         # Pairwise interactions
         for i, (res_i, q_i, pos_i) in enumerate(charged_residues):
-            for j, (res_j, q_j, pos_j) in enumerate(charged_residues[i+1:], start=i+1):
+            for j, (res_j, q_j, pos_j) in enumerate(charged_residues[i + 1:], start=i + 1):
                 distance = np.linalg.norm(pos_i - pos_j)
 
                 if distance < 3.0:  # Avoid singularity
@@ -414,7 +445,7 @@ class TotalEnergy:
         self,
         hydrophobic_weight: float = 1.0,
         electrostatic_weight: float = 1.0,
-        temperature: float = 310.15
+            temperature: float = 310.15,
     ):
         """
         Initialize total energy calculator.
@@ -433,8 +464,8 @@ class TotalEnergy:
         self,
         protein_atoms: AtomGroup,
         membrane_center_z: float,
-        residue_sasa: Optional[Dict[int, float]] = None
-    ) -> Dict:
+            residue_sasa: dict[int, float] | None = None,
+    ) -> dict:
         """
         Calculate all energy terms.
 
@@ -447,11 +478,9 @@ class TotalEnergy:
             Dictionary with energy components and per-residue contributions
         """
         protein_com_z = protein_atoms.center_of_mass()[2]
-        
+
         # Hydrophobic energy
-        e_hydrophobic, hydro_per_res = self.hydrophobic.calculate_total_energy(
-            protein_atoms
-        )
+        e_hydrophobic, hydro_per_res = self.hydrophobic.calculate_total_energy(protein_atoms)
 
         # Electrostatic energy (membrane interaction)
         e_electrostatic, elec_per_res = self.electrostatic.calculate_membrane_interaction_energy(
@@ -459,8 +488,9 @@ class TotalEnergy:
         )
 
         # Total weighted energy
-        total = (self.hydrophobic_weight * e_hydrophobic +
-                self.electrostatic_weight * e_electrostatic)
+        total = (
+                self.hydrophobic_weight * e_hydrophobic + self.electrostatic_weight * e_electrostatic
+        )
 
         # Combine per-residue energies
         all_resids = set(list(hydro_per_res.keys()) + list(elec_per_res.keys()))
@@ -468,12 +498,15 @@ class TotalEnergy:
         for resid in all_resids:
             hydro = hydro_per_res.get(resid, 0.0)
             elec = elec_per_res.get(resid, 0.0)
-            per_residue[resid] = (hydro, elec, self.hydrophobic_weight * hydro + self.electrostatic_weight * elec)
-            
+            per_residue[resid] = (
+                hydro,
+                elec,
+                self.hydrophobic_weight * hydro + self.electrostatic_weight * elec,
+            )
 
         return {
-            'total': total,
-            'hydrophobic': e_hydrophobic,
-            'electrostatic': e_electrostatic,
-            'per_residue': per_residue
+            "total": total,
+            "hydrophobic": e_hydrophobic,
+            "electrostatic": e_electrostatic,
+            "per_residue": per_residue,
         }
