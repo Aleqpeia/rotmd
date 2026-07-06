@@ -10,16 +10,17 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
+from typing import Dict, Optional
+
 import numpy as np
-from typing import Dict, Optional, Tuple
 from tqdm import tqdm
 
+import rotmd.core.kernels as K
 from rotmd.core.vector_observables import (
     compute_cross_product_trajectory,
     create_vector_observable,
     VectorObservable
 )
-from rotmd.core.inertia import compute_center_of_mass 
 
 
 # =============================================================================
@@ -33,7 +34,8 @@ def compute_angular_momentum(
     principal_axes: np.ndarray,
     membrane_normal: np.ndarray,
     times: Optional[np.ndarray] = None,
-    verbose: bool = False
+        verbose: bool = False,
+        com: Optional[np.ndarray] = None,
 ) -> VectorObservable:
     """
     Compute angular momentum L = Σ m_i (r_i - COM) × v_i.
@@ -48,6 +50,9 @@ def compute_angular_momentum(
         membrane_normal: (3,) membrane normal vector
         times: (n_frames,) optional time points
         verbose: Show progress bar
+        com: (n_frames, 3) precomputed center of mass. When ``None`` it is
+            computed here via the batch kernel; the caller (the extract CLI)
+            passes the COM already computed by the loader to avoid recomputing.
 
     Returns:
         VectorObservable containing:
@@ -67,13 +72,8 @@ def compute_angular_momentum(
     if verbose:
         print("Computing angular momentum...")
 
-    # Compute center of mass
-    n_frames = positions.shape[0]
-    com = np.zeros((n_frames, 3))
-    iterator = tqdm(range(n_frames), desc="COM") if verbose else range(n_frames)
-
-    for i in iterator:
-        com[i] = compute_center_of_mass(positions[i], masses)
+    if com is None:
+        com = K.compute_com_batch(positions, masses)
 
     # Compute L = Σ m (r - COM) × v using numba kernel
     L = compute_cross_product_trajectory(positions, velocities, masses, com)
@@ -100,7 +100,8 @@ def compute_torque(
     principal_axes: np.ndarray,
     membrane_normal: np.ndarray,
     times: Optional[np.ndarray] = None,
-    verbose: bool = False
+        verbose: bool = False,
+        com: Optional[np.ndarray] = None,
 ) -> VectorObservable:
     """
     Compute torque τ = Σ (r_i - COM) × F_i.
@@ -115,6 +116,8 @@ def compute_torque(
         membrane_normal: (3,) membrane normal vector
         times: (n_frames,) optional time points
         verbose: Show progress bar
+        com: (n_frames, 3) precomputed center of mass. When ``None`` it is
+            computed here via the batch kernel.
 
     Returns:
         VectorObservable containing:
@@ -135,13 +138,8 @@ def compute_torque(
     if verbose:
         print("Computing torque...")
 
-    # Compute center of mass
-    n_frames = positions.shape[0]
-    com = np.zeros((n_frames, 3))
-    iterator = tqdm(range(n_frames), desc="COM") if verbose else range(n_frames)
-
-    for i in iterator:
-        com[i] = compute_center_of_mass(positions[i], masses)
+    if com is None:
+        com = K.compute_com_batch(positions, masses)
 
     # Compute τ = Σ (r - COM) × F using numba kernel
     # Note: Forces don't need mass weighting
@@ -310,7 +308,8 @@ def compute_all_observables(
     principal_axes: np.ndarray,
     membrane_normal: np.ndarray,
     times: np.ndarray,
-    verbose: bool = True
+        verbose: bool = True,
+        com: Optional[np.ndarray] = None,
 ) -> Dict[str, VectorObservable]:
     """
     Compute all vector observables in one function call.
@@ -325,6 +324,9 @@ def compute_all_observables(
         membrane_normal: (3,)
         times: (n_frames,)
         verbose: Show progress
+        com: (n_frames, 3) precomputed center of mass, threaded to the L and τ
+            computations so the COM is not recomputed. Computed on demand when
+            ``None``.
 
     Returns:
         Dictionary with keys:
@@ -345,12 +347,12 @@ def compute_all_observables(
 
     # Angular momentum
     results['L'] = compute_angular_momentum(
-        positions, velocities, masses, principal_axes, membrane_normal, times, verbose
+        positions, velocities, masses, principal_axes, membrane_normal, times, verbose, com
     )
 
     # Torque
     results['tau'] = compute_torque(
-        positions, forces, masses, principal_axes, membrane_normal, times, verbose
+        positions, forces, masses, principal_axes, membrane_normal, times, verbose, com
     )
 
     # Angular velocity

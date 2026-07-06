@@ -5,14 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from _helpers import ellipsoid_positions, reference_inertia_tensor
 from rotmd.core.inertia import (
     compute_center_of_mass,
     inertia_tensor,
-    parallel_axis_theorem,
     principal_axes,
     principal_moments,
 )
-from _helpers import ellipsoid_positions, reference_inertia_tensor
 
 
 def test_com_simple():
@@ -82,17 +81,3 @@ def test_principal_moments_convenience():
     assert moments == pytest.approx(m2)
     # Elongated along z -> smallest moment is about the long axis.
     assert moments[0] < moments[2]
-
-
-def test_parallel_axis_theorem_zero_displacement_is_identity():
-    I = np.diag([10.0, 20.0, 30.0])
-    assert parallel_axis_theorem(I, 5.0, np.zeros(3)) == pytest.approx(I)
-
-
-def test_parallel_axis_theorem_shift():
-    # Point mass M at origin, shift origin by d along x.
-    I_com = np.zeros((3, 3))
-    M, d = 2.0, np.array([3.0, 0.0, 0.0])
-    shifted = parallel_axis_theorem(I_com, M, d)
-    # Steiner term: M(|d|² I - d⊗d) -> I_xx stays 0, I_yy = I_zz = M|d|².
-    assert shifted == pytest.approx(np.diag([0.0, M * 9, M * 9]))

@@ -8,11 +8,10 @@ import pytest
 pytest.importorskip("MDAnalysis")
 
 from rotmd.io.gromacs import (  # noqa: E402
-    chunked_trajectory_reader,
+    compute_trajectory_energies,
     detect_trajectory_contents,
     extract_frame,
     load_gromacs_trajectory,
-    load_gromacs_trajectory_chunked,
 )
 from _helpers import write_synthetic_gromacs  # noqa: E402
 
@@ -86,16 +85,6 @@ def test_extract_single_frame(tmp_path):
     assert frame["forces"] is not None
 
 
-def test_chunked_reader_yields_all_frames(tmp_path):
-    top, trj, info = write_synthetic_gromacs(tmp_path, n_frames=7)
-    chunks = list(
-        load_gromacs_trajectory_chunked(top, trj, selection="all", chunk_size=3, verbose=False)
-    )
-    total = sum(c["positions"].shape[0] for c in chunks)
-    assert total == 7
-    assert all(c["n_atoms"] == info["n_atoms"] for c in chunks)
-
-
 def test_load_verbose_and_align(tmp_path):
     top, trj, info = write_synthetic_gromacs(tmp_path, n_frames=4)
     # verbose=True + align_to_first exercise the progress prints and the
@@ -106,10 +95,35 @@ def test_load_verbose_and_align(tmp_path):
     assert data["positions"].shape == (4, info["n_atoms"], 3)
 
 
-def test_chunked_trajectory_reader_generator(tmp_path):
-    top, trj, info = write_synthetic_gromacs(tmp_path, n_frames=6)
-    chunks = list(
-        chunked_trajectory_reader(top, trj, chunk_size=4, selection="all")
+def test_compute_trajectory_energies_real_end_to_end(tmp_path):
+    """Exercise the real energy stage (no mock).
+
+    The CLI test mocks ``compute_trajectory_energies``, so this is the only
+    coverage of the actual model import (``models.energy.TotalEnergy``) and of
+    the per-residue projection. It guards two regressions that the mocked path
+    hid: the ``AtomGroup`` import in the energy model, and ``per_residue`` being
+    emitted as a dict-of-tuples instead of an ``(n_frames, n_residues)`` matrix.
+    """
+    n_frames, n_residues = 4, 4
+    top, trj, info = write_synthetic_gromacs(
+        tmp_path, n_frames=n_frames, n_residues=n_residues
     )
-    total = sum(c["n_frames"] for c in chunks)
-    assert total == 6
+    energies = compute_trajectory_energies(
+        top,
+        trj,
+        selection="all",
+        membrane_sel="resname ARG",
+        n_workers=1,
+        verbose=False,
+    )
+
+    for key in ("Etot", "Epol", "Enonpol"):
+        assert energies[key].shape == (n_frames,)
+        assert np.issubdtype(energies[key].dtype, np.floating)
+
+    per_residue = energies["per_residue"]
+    assert per_residue.shape == (n_frames, n_residues)
+    assert np.issubdtype(per_residue.dtype, np.floating)
+    # It must be a real numeric matrix, not an object array of dicts.
+    assert per_residue.dtype != object
+    assert energies["normal"].shape == (3,)

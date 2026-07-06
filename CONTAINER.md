@@ -7,6 +7,7 @@ This document covers:
 3. Converting the image for Apptainer/Singularity (HPC)
 4. Thread-count binding in SLURM jobs
 5. Future JupyterLab-as-library path
+6. Podman-based dev workflow (no Docker daemon required)
 
 ---
 
@@ -224,6 +225,152 @@ To add a JupyterLab layer:
 
 The `jupyter` optional group is already declared in `pyproject.toml`
 (`jupyterlab ^4.0`, `ipywidgets ^8.1`, `nglview ^3.1`).
+
+---
+
+## 6. Podman-based dev workflow (no Docker daemon required)
+
+This section covers local development on **Fedora Atomic / ublue / Bazzite**
+hosts where Docker Desktop is unavailable. The host has rootless podman 5.x;
+VS Code Dev Containers require a Docker daemon and are therefore not usable.
+
+### Primary recommendation: use the existing toolbox for the dev loop
+
+If you are already running inside a `toolbox` or `distrobox` container
+(the default on Fedora Atomic desktops), that environment already provides
+a mutable Fedora userspace with access to your real home directory. For the
+**interactive develop-test-lint cycle**, the simplest path is to install the
+build toolchain and Python deps directly in the toolbox — no container nesting:
+
+```bash
+# Inside your toolbox (toolbox enter <name>)
+sudo dnf install -y gcc gcc-c++ make git     # build-essential equivalent
+pip install --user "poetry==2.3.4"
+poetry install --with dev                    # creates no venv; installs into system Python
+ROTMD_NUMBA=0 pytest tests/ -x -q
+ruff check src tests
+mypy src
+```
+
+This is zero-nesting, instant file feedback, and the same env your editor
+already sees. Use podman when you need to build the production image or verify
+the runtime isolation.
+
+### Building and running with podman
+
+A wrapper script at `scripts/dev.sh` and a `Makefile` cover all common tasks.
+The script auto-detects whether it is running on the host (uses `podman`
+directly) or inside a toolbox (bridges to the host via `flatpak-spawn --host
+podman`).
+
+```bash
+# One-time: build the dev image (~5 min; compiles pytim + freesasa)
+./scripts/dev.sh build           # or: make build
+
+# Open an interactive dev shell (source bind-mounted live at /workspace)
+./scripts/dev.sh shell           # or: make shell
+
+# Run the full test suite inside the container
+./scripts/dev.sh test            # or: make test
+./scripts/dev.sh test -k inertia # pass extra pytest flags after the command
+
+# Fast test run: JIT disabled + pytest-xdist parallel
+./scripts/dev.sh test-fast       # or: make test-fast
+
+# Lint and type-check
+./scripts/dev.sh lint            # or: make lint
+./scripts/dev.sh typecheck       # or: make typecheck
+```
+
+Inside the container the source tree is live-mounted at `/workspace` with the
+same `:z` SELinux label as the host — edits in your editor are immediately
+visible without a rebuild.
+
+### SELinux and rootless-podman gotchas
+
+**Always use `:z` (lowercase) for bind-mounts on Fedora, not `:Z`.**
+
+| Flag                           | Behaviour                                                                                         | When to use                                                      |
+|--------------------------------|---------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| `:z`                           | Applies a *shared* SELinux label — multiple processes (container, editor, toolbox) can read/write | Source code, any directory you also access outside the container |
+| `:Z`                           | Applies a *private* label — other processes (including the host editor) lose access               | Almost never correct for a source tree                           |
+| `:ro,z`                        | Read-only + shared relabel                                                                        | Data/trajectory inputs                                           |
+| `--security-opt label=disable` | Disables SELinux labeling for this container                                                      | CI, when `:z` doesn't work due to NFS or overlay filesystems     |
+
+The `dev.sh` script uses `:z`. If you get `Permission denied` on the mount:
+
+```bash
+# Nuclear option: disable SELinux labeling for the dev session
+podman run --rm -it \
+    --security-opt label=disable \
+    -v /var/home/efyis/projects/rotmd:/workspace \
+    -w /workspace \
+    rotmd:dev bash
+```
+
+**Rootless UID mapping:** podman runs processes inside the container as the
+host user (UID remapped via `/etc/subuid`). Files created at `/workspace`
+inside the container will be owned by your host UID — no permission headaches,
+no `chown` dance. This is the opposite of Docker-on-Linux where processes ran
+as root inside and created root-owned files on the host.
+
+### Building the runtime image and converting for Apptainer (podman path)
+
+CONTAINER.md section 3 documents `apptainer build ... docker-daemon://...`,
+which requires a Docker daemon. With podman, use the `docker-archive` method:
+
+```bash
+# 1. Build the runtime image with podman
+podman build --target runtime -t rotmd:latest .
+
+# 2. Export to a tar archive
+podman save rotmd:latest -o rotmd.tar
+
+# 3. Convert on a machine that has Apptainer (HPC login node or local)
+apptainer build rotmd.sif docker-archive://rotmd.tar
+```
+
+Or, if you push to a registry (GHCR/Docker Hub), the `apptainer pull
+docker://...` path in section 3b works unchanged — no daemon needed on the
+HPC side.
+
+The convenience command for steps 1+2 together:
+
+```bash
+./scripts/dev.sh save-runtime            # writes rotmd.tar in the repo root
+./scripts/dev.sh save-runtime /tmp/rotmd.tar   # custom output path
+```
+
+### Dockerfile compatibility with podman/Buildah
+
+The existing `Dockerfile` builds under podman without modification:
+
+- The `# syntax=docker/dockerfile:1.9` frontend directive is silently ignored
+  by Buildah (podman's build backend) when no BuildKit is configured; it does
+  not cause an error or change behaviour. No `--format docker` flag is needed
+  for building.
+- `COPY --from=builder` multi-stage syntax is fully supported by Buildah.
+- No `RUN --mount`, `--secret`, or `--ssh` BuildKit-only directives are used,
+  so there is no compatibility gap.
+
+### VS Code / editor without Dev Containers
+
+Without the Dev Containers extension working, the ergonomic dev loop is:
+
+1. Open the project directory on the host / in your toolbox as normal.
+2. Set the Python interpreter to whichever `python3` poetry installed into
+   (usually `/home/efyis/.local/share/poetry/...` or the toolbox system python).
+3. The same env vars from `devcontainer.json` can be put in a `.env` file or
+   a shell alias:
+   ```bash
+   alias rotmd-dev='ROTMD_NUMBA=0 PYTHONDONTWRITEBYTECODE=1 NUMBA_NUM_THREADS=2'
+   ```
+4. Use `make test`, `make lint`, `make typecheck` from the terminal.
+
+If you later get VS Code's Dev Containers extension working with podman as the
+backend (possible: set `dev.containers.dockerPath` to `flatpak-spawn --host
+podman` or the `podman-remote` socket path), the existing `.devcontainer/
+devcontainer.json` works unchanged with the `dev` image target.
 
 ---
 

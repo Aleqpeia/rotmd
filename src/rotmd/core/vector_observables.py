@@ -25,10 +25,10 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
-import numpy as np
-from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
-import xarray as xr
+from typing import Tuple, Optional
+
+import numpy as np
 
 # Import runtime-agnostic kernels
 from . import kernels as K
@@ -177,69 +177,6 @@ class VectorObservable:
     times: Optional[np.ndarray] = None
     name: str = "vector"
 
-    def to_dict(self) -> Dict[str, np.ndarray]:
-        """
-        Convert to dictionary for saving to NPZ.
-
-        Returns:
-            dict: All components with descriptive keys
-        """
-        return {
-            f"{self.name}": self.vector,
-            f"{self.name}_parallel": self.parallel,
-            f"{self.name}_perp": self.perp,
-            f"{self.name}_z": self.z_component,
-            f"{self.name}_mag": self.magnitude,
-            f"{self.name}_parallel_mag": self.parallel_mag,
-            f"{self.name}_perp_mag": self.perp_mag,
-            f"{self.name}_z_mag": self.z_mag,
-        }
-
-    def to_xarray(self) -> xr.Dataset:
-        """
-        Convert to xarray Dataset with metadata for NetCDF export.
-
-        Returns:
-            xr.Dataset: With coordinates and attributes
-        """
-        if self.times is not None:
-            coords = {"time": self.times, "component": ["x", "y", "z"]}
-        else:
-            coords = {
-                "frame": np.arange(len(self.vector)),
-                "component": ["x", "y", "z"],
-            }
-
-        return xr.Dataset(
-            {
-                self.name: (
-                    ["time" if self.times is not None else "frame", "component"],
-                    self.vector,
-                ),
-                f"{self.name}_mag": (
-                    ["time" if self.times is not None else "frame"],
-                    self.magnitude,
-                ),
-                f"{self.name}_parallel_mag": (
-                    ["time" if self.times is not None else "frame"],
-                    self.parallel_mag,
-                ),
-                f"{self.name}_perp_mag": (
-                    ["time" if self.times is not None else "frame"],
-                    self.perp_mag,
-                ),
-            },
-            coords=coords,
-        )
-
-    def mean(self) -> float:
-        """Mean magnitude."""
-        return float(np.mean(self.magnitude))
-
-    def std(self) -> float:
-        """Standard deviation of magnitude."""
-        return float(np.std(self.magnitude))
-
 
 # =============================================================================
 # Factory Functions
@@ -273,7 +210,7 @@ def create_vector_observable(
         >>> L = np.random.rand(1000, 3)
         >>> axis = np.array([1, 0, 0])
         >>> obs = create_vector_observable(L, axis, name="L")
-        >>> print(f"Mean |L|: {obs.mean():.3f}")
+        >>> print(f"Mean |L|: {obs.magnitude.mean():.3f}")
         Mean |L|: 1.732
     """
     # Decompose into parallel/perpendicular relative to reference axis
@@ -305,37 +242,10 @@ def create_vector_observable(
     )
 
 
-def compute_spin_nutation_ratio(observable: VectorObservable) -> np.ndarray:
-    """
-    Compute ratio of spin (parallel) to nutation (perpendicular) magnitude.
-
-    spin/nutation ratio = |v_∥| / |v_⊥|
-
-    Args:
-        observable: VectorObservable with decomposition
-
-    Returns:
-        ratio: (n_frames,) spin/nutation ratio
-
-    Examples:
-        >>> L = create_vector_observable(np.random.rand(100, 3), np.array([1, 0, 0]))
-        >>> ratio = compute_spin_nutation_ratio(L)
-        >>> print(f"Mean spin/nutation: {ratio.mean():.3f}")
-        Mean spin/nutation: 1.234
-    """
-    return observable.parallel_mag / (observable.perp_mag + 1e-10)
-
-
-# =============================================================================
-# Backward Compatibility
-# =============================================================================
-
-# Keep these names for existing code that imports them
 __all__ = [
     "decompose_vector_parallel",
     "compute_magnitudes",
     "compute_cross_product_trajectory",
     "VectorObservable",
     "create_vector_observable",
-    "compute_spin_nutation_ratio",
 ]
