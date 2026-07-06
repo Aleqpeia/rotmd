@@ -181,6 +181,7 @@ def extract(config: ExtractConfig) -> Path:
         membrane_normal=membrane_normal,
         times=traj["times"],
         verbose=False,
+        com=traj["com"],
     )
 
     print("[6/6] Energies (SASA + simplified electrostatic, parallel)")

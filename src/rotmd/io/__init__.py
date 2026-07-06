@@ -1,42 +1,32 @@
 """
-I/O Module for Protein Orientation Analysis
+I/O for the rotmd extract pipeline.
 
-Provides utilities for reading GROMACS trajectories and saving analysis results.
+Reading GROMACS trajectories/topologies and computing per-frame energies, plus
+the compressed ``.npz`` chunk format that is the extract↔analyze contract.
+Streaming/chunked readers for oversized trajectories live in
+:mod:`rotmd.analysis.io`.
 """
 
 from .gromacs import (
     load_gromacs_trajectory,
-    chunked_trajectory_reader,
+    compute_trajectory_energies,
     detect_trajectory_contents,
-    extract_frame
+    extract_frame,
 )
-
 from .output import (
-    save_results_json,
-    load_results_json,
-    save_results_npz,
-    load_results_npz,
-    save_results_hdf5,
-    load_results_hdf5,
-    save_trajectory_data,
-    load_trajectory_data,
-    export_to_csv
+    save_npz,
+    load_npz,
+    merge_npz,
 )
 
 __all__ = [
     # GROMACS I/O
-    'load_gromacs_trajectory',
-    'chunked_trajectory_reader',
-    'detect_trajectory_contents',
-    'extract_frame',
-    # Output handling
-    'save_results_json',
-    'load_results_json',
-    'save_results_npz',
-    'load_results_npz',
-    'save_results_hdf5',
-    'load_results_hdf5',
-    'save_trajectory_data',
-    'load_trajectory_data',
-    'export_to_csv',
+    "load_gromacs_trajectory",
+    "compute_trajectory_energies",
+    "detect_trajectory_contents",
+    "extract_frame",
+    # NPZ chunk I/O
+    "save_npz",
+    "load_npz",
+    "merge_npz",
 ]

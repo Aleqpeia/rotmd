@@ -153,11 +153,27 @@ COPY pyproject.toml poetry.lock README.md ./
 COPY src/ ./src/
 
 # Install dev dependencies (not root — same --no-root pattern as builder),
-# then install rotmd itself as a real wheel.  The postCreateCommand in
-# devcontainer.json re-runs this after the workspace is mounted so any
-# pyproject.toml edits on the host are picked up without a rebuild.
+# then install rotmd itself as an EDITABLE install.  Editable matters in the
+# dev image: the workspace is bind-mounted over /workspace at run time, so the
+# .pth pointer resolves to the live host src.  Any process — including the bare
+# `python -c ...` subprocess that tests/test_kernels.py spawns, which does NOT
+# inherit pytest's `pythonpath=src` — then imports the live source, so host
+# edits are visible without a rebuild.  (Builder/runtime stages stay a real
+# wheel; production has no src mount.)
 RUN poetry install --with dev --no-root --no-interaction --no-ansi \
- && pip install --no-deps --no-cache-dir .
+ && pip install --no-deps --no-cache-dir -e .
 
-# Drop back to a shell entrypoint for the dev container
-ENTRYPOINT ["/bin/bash"]
+# Clear the inherited `rotmd` ENTRYPOINT (and its `--help` CMD) so the dev
+# container runs commands directly instead of treating them as arguments.
+#
+# ENTRYPOINT [] resets the inherited entrypoint to nothing; CMD ["/bin/bash"]
+# makes an interactive shell the *default* command. Crucially this keeps the
+# command overridable:
+#   podman run rotmd:dev               -> /bin/bash      (interactive shell)
+#   podman run rotmd:dev pytest -q     -> pytest -q      (runs directly)
+#   podman run rotmd:dev ruff check .  -> ruff check .   (runs directly)
+# With ENTRYPOINT ["/bin/bash"] the args become a *script* for bash, so
+# `pytest` is parsed as shell ("import: command not found") and `/bin/bash`
+# is exec'd as a script ("cannot execute binary file").
+ENTRYPOINT []
+CMD ["/bin/bash"]

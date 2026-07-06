@@ -15,6 +15,7 @@ import tempfile
 import MDAnalysis as mda
 import freesasa
 import numpy as np
+from MDAnalysis.core.groups import AtomGroup
 
 # Kyte-Doolittle hydrophobicity scale
 HYDROPHOBICITY_SCALE = {
@@ -131,8 +132,10 @@ class HydrophobicEnergy:
         Returns:
             Burial fraction (0 = fully exposed, 1 = fully buried)
         """
+
         ref_sasa = self.reference_sasa.get(residue.resname, 150.0)
         burial = 1.0 - min(current_sasa / ref_sasa, 1.0)
+
         return max(0.0, burial)
 
     def calculate_residue_energy(

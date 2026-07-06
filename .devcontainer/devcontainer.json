@@ -111,6 +111,11 @@
   },
   // Run as root in the dev container (avoids file-permission headaches with
   // bind-mounted sources on Linux hosts where UID may differ).
+  // containerUser must be set explicitly: the dev stage has no USER instruction,
+  // so Docker's Config.User is "" (empty string, not "root"). Without this, the
+  // Dev Containers tooling's updateRemoteUserUID path cannot resolve a concrete
+  // user and fails with "user was not specified".
+  "containerUser": "root",
   "remoteUser": "root"
 
   // ── Forwarded ports ───────────────────────────────────────────────────────

@@ -14,9 +14,47 @@ Author: Mykyta Bobylyow
 Date: 2025
 """
 
+import os
+
 import numpy as np
-from numba import jit, prange
-from typing import Tuple
+
+# ---------------------------------------------------------------------------
+# Numba-optional runtime
+#
+# Numba is the default backend. Setting ROTMD_NUMBA=0 (or running where numba
+# is not installed) forces a pure-NumPy fallback: the @jit decorators become
+# no-ops and ``prange`` aliases the builtin ``range`` so the *same* kernel code
+# runs unjitted. The parallel loops only do per-frame index assignment (no
+# cross-iteration reductions), so results are identical — only speed differs.
+# dev.sh / devcontainer.json set ROTMD_NUMBA=0 for fast, JIT-free imports.
+# ---------------------------------------------------------------------------
+try:
+    if os.environ.get("ROTMD_NUMBA", "1") == "0":
+        raise ImportError("ROTMD_NUMBA=0 forces the pure-NumPy fallback")
+    from numba import jit, prange
+
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
+
+
+    def jit(*args, **kwargs):
+        """No-op stand-in for ``numba.jit`` (fallback when numba is off).
+
+        Handles both the bare ``@jit`` and the parametrized
+        ``@jit(nopython=True)`` forms; the wrapped function is returned
+        unchanged either way.
+        """
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        def decorator(func):
+            return func
+
+        return decorator
+
+
+    prange = range
 
 
 # =============================================================================
@@ -26,8 +64,9 @@ from typing import Tuple
 
 @jit(nopython=True)
 def decompose_vector_single(
-    vector: np.ndarray, reference: np.ndarray  # (3,)  # (3,)
-) -> Tuple[np.ndarray, np.ndarray]:
+        vector: np.ndarray,
+        reference: np.ndarray,  # (3,)  # (3,)
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Decompose single vector into parallel and perpendicular components.
 
@@ -49,8 +88,9 @@ def decompose_vector_single(
 
 
 def decompose_vector_batch(
-    vectors: np.ndarray, reference_axes: np.ndarray  # (n_frames, 3)  # (n_frames, 3)
-) -> Tuple[np.ndarray, np.ndarray]:
+        vectors: np.ndarray,
+        reference_axes: np.ndarray,  # (n_frames, 3)  # (n_frames, 3)
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Batch decomposition over frames with parallel execution.
 
@@ -65,24 +105,24 @@ def decompose_vector_batch(
 
 @jit(nopython=True, parallel=True)
 def _decompose_vector_batch_impl(
-    vectors: np.ndarray, reference_axes: np.ndarray  # (n_frames, 3)  # (n_frames, 3)
-) -> Tuple[np.ndarray, np.ndarray]:
+        vectors: np.ndarray,
+        reference_axes: np.ndarray,  # (n_frames, 3)  # (n_frames, 3)
+) -> tuple[np.ndarray, np.ndarray]:
     """Internal JIT-compiled implementation."""
     n_frames = vectors.shape[0]
     v_parallel = np.zeros((n_frames, 3), dtype=np.float64)
     v_perp = np.zeros((n_frames, 3), dtype=np.float64)
 
     for i in prange(n_frames):
-        v_parallel[i], v_perp[i] = decompose_vector_single(
-            vectors[i], reference_axes[i]
-        )
+        v_parallel[i], v_perp[i] = decompose_vector_single(vectors[i], reference_axes[i])
 
     return v_parallel, v_perp
 
 
 def decompose_vector_batch_static_ref(
-    vectors: np.ndarray, reference: np.ndarray  # (n_frames, 3)  # (3,)
-) -> Tuple[np.ndarray, np.ndarray]:
+        vectors: np.ndarray,
+        reference: np.ndarray,  # (n_frames, 3)  # (3,)
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Batch decomposition with static reference (optimized matrix operations).
     """
@@ -95,8 +135,9 @@ def decompose_vector_batch_static_ref(
 
 @jit(nopython=True)
 def _decompose_vector_batch_static_ref_impl(
-    vectors: np.ndarray, reference: np.ndarray  # (n_frames, 3)  # (3,)
-) -> Tuple[np.ndarray, np.ndarray]:
+        vectors: np.ndarray,
+        reference: np.ndarray,  # (n_frames, 3)  # (3,)
+) -> tuple[np.ndarray, np.ndarray]:
     """Internal JIT-compiled implementation."""
     ref_norm = np.linalg.norm(reference)
     ref_unit = reference / (ref_norm + 1e-10)
@@ -229,7 +270,8 @@ def _cross_product_trajectory_impl(
 
 @jit(nopython=True)
 def compute_com_single(
-    positions: np.ndarray, masses: np.ndarray  # (n_atoms, 3)  # (n_atoms,)
+        positions: np.ndarray,
+        masses: np.ndarray,  # (n_atoms, 3)  # (n_atoms,)
 ) -> np.ndarray:
     """Compute center of mass for single frame."""
     total_mass = np.sum(masses)
@@ -242,7 +284,8 @@ def compute_com_single(
 
 
 def compute_com_batch(
-    positions: np.ndarray, masses: np.ndarray  # (n_frames, n_atoms, 3)  # (n_atoms,)
+        positions: np.ndarray,
+        masses: np.ndarray,  # (n_frames, n_atoms, 3)  # (n_atoms,)
 ) -> np.ndarray:
     """Batch COM computation with parallel execution."""
     # Ensure consistent dtype (float64) to avoid Numba typing errors
@@ -254,7 +297,8 @@ def compute_com_batch(
 
 @jit(nopython=True, parallel=True)
 def _compute_com_batch_impl(
-    positions: np.ndarray, masses: np.ndarray  # (n_frames, n_atoms, 3)  # (n_atoms,)
+        positions: np.ndarray,
+        masses: np.ndarray,  # (n_frames, n_atoms, 3)  # (n_atoms,)
 ) -> np.ndarray:
     """Internal JIT-compiled implementation."""
     n_frames = positions.shape[0]
@@ -342,7 +386,7 @@ def _inertia_tensor_batch_impl(
 
 def principal_axes_batch(
     inertia_tensors: np.ndarray,  # (n_frames, 3, 3)
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute principal axes for batch of inertia tensors.
 
@@ -376,7 +420,8 @@ def principal_axes_batch(
 
 @jit(nopython=True, parallel=True)
 def solve_linear_batch(
-    A: np.ndarray, b: np.ndarray  # (n_frames, n, n)  # (n_frames, n)
+        A: np.ndarray,
+        b: np.ndarray,  # (n_frames, n, n)  # (n_frames, n)
 ) -> np.ndarray:
     """
     Solve A @ x = b for batch of linear systems.
@@ -400,7 +445,8 @@ def solve_linear_batch(
 
 @jit(nopython=True)
 def time_derivative_batch(
-    data: np.ndarray, times: np.ndarray  # (n_frames, ...)  # (n_frames,)
+        data: np.ndarray,
+        times: np.ndarray,  # (n_frames, ...)  # (n_frames,)
 ) -> np.ndarray:
     """
     Compute time derivative using finite differences.
@@ -431,9 +477,7 @@ def time_derivative_batch(
 # =============================================================================
 
 
-def process_in_chunks(
-    func, data: np.ndarray, chunk_size: int = 1000, **kwargs
-) -> np.ndarray:
+def process_in_chunks(func, data: np.ndarray, chunk_size: int = 1000, **kwargs) -> np.ndarray:
     """
     Process large trajectory in chunks.
 
