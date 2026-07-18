@@ -462,6 +462,51 @@ def merge(inputs: list[Path], output: Path, force: bool) -> Path:
     return out
 
 
+def plot_equil(
+    inputs: list[Path], outdir: Path, window_path: Path | None, force: bool
+) -> Path:
+    """T2 — equilibration figures: RMSD / Rg / per-domain with t0 marked."""
+    from rotmd.analysis.plots import plot_equilibration, plot_replica_overlay
+    from rotmd.io.meta import meta_path, read_json
+    from rotmd.io.output import load_npz
+
+    window = read_json(window_path) if window_path else None
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    datasets = []
+    written = []
+    for src in sorted(inputs):
+        data = load_npz(src)
+        sidecar = meta_path(src)
+        meta = read_json(sidecar) if sidecar.exists() else {}
+        label = "/".join(
+            str(meta[k]) for k in ("system", "replica") if meta.get(k) is not None
+        ) or src.stem
+
+        target = outdir / f"equil_{src.stem}.png"
+        if target.exists() and not force:
+            print(f"✓ {target} exists — skipping (use --force to overwrite)")
+        else:
+            plot_equilibration(
+                data, target, window=window,
+                domain_names=meta.get("domain_names"), title=label,
+            )
+            written.append(target)
+            print(f"✓ {target}")
+        datasets.append((label, data))
+
+    if len(datasets) > 1:
+        overlay = outdir / "equil_overlay.png"
+        if overlay.exists() and not force:
+            print(f"✓ {overlay} exists — skipping (use --force to overwrite)")
+        else:
+            plot_replica_overlay(datasets, overlay, window=window, title="Replica overlay")
+            written.append(overlay)
+            print(f"✓ {overlay}")
+
+    return written[0] if written else outdir
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rotmd", description="rotmd — chunked extract pipeline")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -477,6 +522,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 
+    p_plot = sub.add_parser(
+        "plot-equil",
+        help="Equilibration figures (RMSD/Rg/per-domain) with t0 marked",
+        description="One figure per replica, plus a replica overlay when given "
+                    "more than one input.",
+    )
+    p_plot.add_argument("inputs", nargs="+", type=Path, help="Merged .npz files")
+    p_plot.add_argument("-o", "--outdir", required=True, type=Path)
+    p_plot.add_argument(
+        "--window", type=Path, help="window.json — draws t0 and shades the discarded region"
+    )
+    p_plot.add_argument("--force", action="store_true")
 
 
 
@@ -509,6 +566,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "merge":
         merge(args.inputs, args.output, args.force)
+        return 0
+    if args.cmd == "plot-equil":
+        plot_equil(args.inputs, args.outdir, args.window, args.force)
         return 0
     parser.print_help()
     return 2
