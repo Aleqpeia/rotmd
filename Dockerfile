@@ -123,6 +123,37 @@ ENTRYPOINT ["rotmd"]
 CMD ["--help"]
 
 # =============================================================================
+# Kernel stage — runtime + ipykernel, for use as a Jupyter kernel on HPC.
+#
+# On a JupyterHub / `module load`-style Jupyter deployment you cannot install
+# into the Hub's base environment, and pytim/freesasa need a compiler anyway.
+# Instead this image is registered as a *user-level kernel* (kernelspec under
+# ~/.local/share/jupyter/kernels): the JupyterLab frontend stays whatever the
+# Hub provides, but the kernel process runs inside this container via
+# `apptainer exec ... python -m ipykernel_launcher`, giving the notebook the
+# exact pinned numba/MDAnalysis/pytim/freesasa stack.
+#
+# Only ipykernel is added — NOT jupyterlab/ipywidgets/nglview — because the
+# frontend comes from the Hub. ipykernel and its compiled dep pyzmq both ship
+# manylinux wheels, so no build toolchain is needed here.
+#
+# NOTE: ipykernel is not in poetry.lock, so this line is outside the lock's
+# reproducibility guarantee. The scientific stack (COPY'd from runtime) stays
+# fully locked; only the kernel shim floats. To lock it too, add ipykernel to
+# the `jupyter` poetry group and relock.
+#
+# See scripts/hpc/install-jupyter-kernel.sh and CONTAINER.md §5.
+# =============================================================================
+FROM runtime AS kernel
+
+RUN pip install --no-cache-dir "ipykernel>=6.29"
+
+# Clear the CLI ENTRYPOINT so `apptainer exec ... python -m ipykernel_launcher`
+# runs python directly rather than passing it as an argument to `rotmd`.
+ENTRYPOINT []
+CMD ["python", "-m", "ipykernel_launcher"]
+
+# =============================================================================
 # Dev stage — extends runtime with the dev dependency group + dev tools.
 # Used by .devcontainer; not pushed as the production image.
 # The workspace is bind-mounted at /workspace at container start, so live
