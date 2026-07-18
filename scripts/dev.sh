@@ -17,6 +17,8 @@
 #   ./scripts/dev.sh typecheck      # mypy
 #   ./scripts/dev.sh build-runtime  # build the production runtime image
 #   ./scripts/dev.sh save-runtime   # export runtime image for Apptainer
+#   ./scripts/dev.sh build-kernel   # build runtime + ipykernel (Jupyter kernel)
+#   ./scripts/dev.sh save-kernel    # export kernel image for Apptainer
 #
 # SELinux note (Fedora rootless podman):
 #   The source directory is bind-mounted with :z (shared relabel).
@@ -30,6 +32,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_DEV="rotmd:dev"
 IMAGE_RUNTIME="rotmd:latest"
+IMAGE_KERNEL="rotmd:kernel"
 
 # ---------------------------------------------------------------------------
 # Resolve podman: prefer PATH, fall back to flatpak-spawn --host
@@ -106,6 +109,27 @@ case "$cmd" in
         $PODMAN save "$IMAGE_RUNTIME" -o "$OUT"
         echo "Transfer rotmd.tar to HPC, then on the login node:"
         echo "  apptainer build rotmd.sif docker-archive://rotmd.tar"
+        ;;
+
+    build-kernel)
+        echo "==> Building kernel image (${IMAGE_KERNEL}) …"
+        $PODMAN build \
+            --target kernel \
+            -t "$IMAGE_KERNEL" \
+            "$REPO_ROOT"
+        ;;
+
+    save-kernel)
+        # Export the kernel image (runtime + ipykernel) for Apptainer conversion.
+        # On the HPC login node: apptainer build rotmd.sif docker-archive://rotmd-kernel.tar
+        # Register it as a Jupyter kernel with scripts/hpc/install-jupyter-kernel.sh.
+        OUT="${1:-${REPO_ROOT}/rotmd-kernel.tar}"
+        echo "==> Saving kernel image to ${OUT} …"
+        $PODMAN build --target kernel -t "$IMAGE_KERNEL" "$REPO_ROOT"
+        $PODMAN save "$IMAGE_KERNEL" -o "$OUT"
+        echo "Transfer $(basename "$OUT") to HPC, then on the login node:"
+        echo "  apptainer build rotmd.sif docker-archive://$(basename "$OUT")"
+        echo "  bash scripts/hpc/install-jupyter-kernel.sh --sif /path/to/rotmd.sif"
         ;;
 
     shell)

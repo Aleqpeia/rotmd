@@ -191,40 +191,96 @@ apptainer exec \
 
 ---
 
-## 5. Future: JupyterLab as library
+## 5. JupyterLab on HPC: register the container as a kernel
 
-The `rotmd` package is installed into the system Python with no virtual-env
-wrapping, so it is importable anywhere `python3` reaches:
+The recommended way to use `rotmd` from a JupyterLab that is **already deployed
+on the cluster** (JupyterHub, an Open OnDemand app, or a `module load jupyter`
+setup) is to register the container as a *user-level Jupyter kernel*. You do
+not touch the Hub's base environment — you drop a kernelspec in your home
+directory that the Hub's JupyterLab discovers automatically. Selecting it runs
+the kernel process *inside* the container, so the notebook gets the exact
+pinned `numba`/`MDAnalysis`/`pytim`/`freesasa` stack while the JupyterLab
+frontend stays whatever the Hub provides.
 
-```python
-# Inside any Python process that has the same interpreter
-import rotmd
-from rotmd.core.kernels import angular_momentum_kernel
+This is preferable to `pip install`-ing `rotmd` into the Jupyter environment:
+on a Hub/module setup you usually cannot write to the base env, and `pytim`
+and `freesasa` are sdist-only (they need a compiler the login node may lack).
+
+### 5a. Build a kernel-capable image
+
+The runtime image has no `ipykernel`. The `kernel` Dockerfile stage adds it
+(and only it — `ipykernel` + its `pyzmq` dep both ship manylinux wheels, so no
+compiler is needed; JupyterLab itself comes from the Hub, not this image):
+
+```bash
+# Locally (podman): build + export in one step
+./scripts/dev.sh save-kernel                 # writes rotmd-kernel.tar
+
+# On the HPC login node
+apptainer build rotmd.sif docker-archive://rotmd-kernel.tar
 ```
 
-To add a JupyterLab layer:
+`ipykernel` is not in `poetry.lock`, so it floats outside the lock's
+reproducibility guarantee; the scientific stack copied from the `runtime`
+stage stays fully locked. To lock the kernel shim too, add `ipykernel` to the
+`jupyter` poetry group and relock.
 
-1. Install the `jupyter` poetry group on top of the runtime image:
-   ```dockerfile
-   FROM rotmd:latest AS jupyter
-   RUN pip install --no-cache-dir \
-       "jupyterlab>=4.0" "ipywidgets>=8.1" "nglview>=3.1"
-   EXPOSE 8888
-   ENTRYPOINT ["jupyter", "lab", "--ip=0.0.0.0", "--no-browser", "--allow-root"]
-   ```
-   Or use `poetry install --with jupyter` if you add it as a second stage.
+### 5b. Install the kernelspec
 
-2. On HPC with Apptainer, bind the data and start the server:
-   ```bash
-   apptainer exec \
-     --bind /scratch/$USER:/work \
-     rotmd-jupyter.sif \
-     jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
-   ```
-   Then forward port 8888 from the compute node to your laptop via SSH tunnel.
+Run the installer on a node that shares the home directory JupyterHub spawns
+from (usually the login node):
 
-The `jupyter` optional group is already declared in `pyproject.toml`
-(`jupyterlab ^4.0`, `ipywidgets ^8.1`, `nglview ^3.1`).
+```bash
+bash scripts/hpc/install-jupyter-kernel.sh \
+  --sif /scratch/$USER/rotmd.sif \
+  --bind /scratch/$USER/md_data        # extra data mounts, repeatable
+```
+
+It writes `~/.local/share/jupyter/kernels/rotmd/{kernel.json,launch.sh}`.
+Restart JupyterLab and pick **rotmd** from the launcher; then `import rotmd`
+in any notebook works. `launch.sh` reads `$SLURM_CPUS_PER_TASK` to bind numba/
+OpenMP/OpenBLAS thread counts to your allocation (see section 4), falling back
+to `--threads N` (default 4).
+
+### 5c. Gotchas on JupyterHub
+
+- **Connection file must be readable in the container.** The Hub writes the
+  kernel connection file into its runtime dir. Apptainer auto-binds `$HOME`,
+  `/tmp`, and `$PWD`, which covers most Hubs. If your cluster sets
+  `XDG_RUNTIME_DIR=/run/user/$UID`, add `--bind /run/user/$(id -u)` to the
+  generated `launch.sh` or the kernel dies at startup with a missing-file
+  error — this is the #1 failure mode, check it first.
+- **Keep host networking.** ipykernel talks to the frontend over localhost TCP;
+  Apptainer shares host networking by default. Do not add `--net`.
+- **Bind your data.** Only `/scratch/$USER` is bound by default; add `--bind`
+  for any other filesystem your trajectories live on.
+- **`nglview` will not render** unless the Hub's JupyterLab has the
+  ipywidgets/nglview JS extension installed frontend-side (you cannot add that
+  to a module env). Use `matplotlib` for in-notebook plots — it renders as PNG
+  from the kernel and works regardless.
+- **Interrupt:** the kernelspec sets `"interrupt_mode": "message"` because
+  signal-based Ctrl-C does not reliably cross the `apptainer exec` boundary.
+
+### 5d. Alternative: run JupyterLab entirely from the container
+
+If instead you have *no* Jupyter yet and want to serve it from the container,
+install the full `jupyter` group (`jupyterlab`, `ipywidgets`, `nglview`, all
+declared optional in `pyproject.toml`) into a separate stage and launch the
+server as a batch job:
+
+```dockerfile
+FROM runtime AS jupyterlab
+RUN pip install --no-cache-dir "jupyterlab>=4.0" "ipywidgets>=8.1" "nglview>=3.1"
+EXPOSE 8888
+```
+
+```bash
+apptainer exec --bind /scratch/$USER:/work rotmd-jupyterlab.sif \
+  jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
+```
+
+Then SSH-tunnel port 8888 from the compute node to your laptop. This replaces
+the Hub rather than plugging into it; prefer 5a–5c when a Hub already exists.
 
 ---
 
