@@ -58,6 +58,101 @@ def ellipsoid_positions(
     return pts * np.asarray(axes)
 
 
+def _place_atom(a, b, c, bond, angle_deg, torsion_deg):
+    """NeRF: position D from A, B, C plus |CD|, angle(BCD) and torsion(ABCD)."""
+    angle, torsion = np.radians(angle_deg), np.radians(torsion_deg)
+    bc = c - b
+    bc /= np.linalg.norm(bc)
+    n = np.cross(b - a, bc)
+    n /= np.linalg.norm(n)
+    m = np.cross(n, bc)
+    d = np.array([
+        -bond * np.cos(angle),
+        bond * np.sin(angle) * np.cos(torsion),
+        bond * np.sin(angle) * np.sin(torsion),
+    ])
+    return c + d[0] * bc + d[1] * m + d[2] * n
+
+
+def build_backbone(n_res: int, phi: float = -57.0, psi: float = -47.0, omega: float = 180.0):
+    """Ideal protein backbone (N, CA, C, O) at the given torsions.
+
+    Defaults are the canonical alpha-helix, which reproduces a 3.8 Å CA-CA
+    spacing and the i -> i+4 O...N hydrogen bond at ~3.0 Å, so DSSP genuinely
+    assigns 'H'. Pass ``phi=-139, psi=135`` for an extended/beta strand.
+    """
+    b_nca, b_cac, b_cn, b_co = 1.458, 1.525, 1.329, 1.231
+    a_ncac, a_cacn, a_cnca, a_caco = 111.2, 116.2, 121.7, 120.8
+
+    n_atoms = [np.array([0.0, 0.0, 0.0])]
+    ca_atoms = [np.array([b_nca, 0.0, 0.0])]
+    theta = np.radians(a_ncac)
+    c_atoms = [ca_atoms[0] + b_cac * np.array([-np.cos(theta), np.sin(theta), 0.0])]
+    o_atoms = []
+
+    for i in range(n_res):
+        o_atoms.append(_place_atom(n_atoms[i], ca_atoms[i], c_atoms[i], b_co, a_caco, psi + 180.0))
+        if i == n_res - 1:
+            break
+        n_atoms.append(_place_atom(n_atoms[i], ca_atoms[i], c_atoms[i], b_cn, a_cacn, psi))
+        ca_atoms.append(_place_atom(ca_atoms[i], c_atoms[i], n_atoms[i + 1], b_nca, a_cnca, omega))
+        c_atoms.append(_place_atom(c_atoms[i], n_atoms[i + 1], ca_atoms[i + 1], b_cac, a_ncac, phi))
+
+    return np.array(n_atoms), np.array(ca_atoms), np.array(c_atoms), np.array(o_atoms)
+
+
+def write_protein_trajectory(
+    directory,
+    n_res: int = 16,
+    n_frames: int = 4,
+    phi: float = -57.0,
+    psi: float = -47.0,
+    jitter: float = 0.02,
+    seed: int = 5,
+):
+    """Write a real backbone protein (.pdb + .xtc) that DSSP can analyse.
+
+    The all-CA system from :func:`write_synthetic_gromacs` has no N/C/O, so
+    DSSP cannot run on it at all. This builds a genuine helix (or strand) with
+    a little per-frame jitter so the trajectory is not perfectly static.
+    """
+    import MDAnalysis as mda
+    from MDAnalysis.coordinates.memory import MemoryReader
+    from pathlib import Path
+
+    directory = Path(directory)
+    rng = np.random.default_rng(seed)
+    n_atoms = n_res * 4
+
+    n_a, ca, c_a, o_a = build_backbone(n_res, phi=phi, psi=psi)
+    base = np.empty((n_atoms, 3))
+    base[0::4], base[1::4], base[2::4], base[3::4] = n_a, ca, c_a, o_a
+
+    frames = base[None] + rng.normal(size=(n_frames, n_atoms, 3)) * jitter
+
+    u = mda.Universe.empty(
+        n_atoms, n_residues=n_res,
+        atom_resindex=np.repeat(np.arange(n_res), 4), trajectory=True,
+    )
+    u.add_TopologyAttr("names", ["N", "CA", "C", "O"] * n_res)
+    u.add_TopologyAttr("elements", ["N", "C", "C", "O"] * n_res)
+    u.add_TopologyAttr("types", ["N", "C", "C", "O"] * n_res)
+    u.add_TopologyAttr("masses", [14.0, 12.0, 12.0, 16.0] * n_res)
+    u.add_TopologyAttr("resnames", ["ALA"] * n_res)
+    u.add_TopologyAttr("resids", list(range(1, n_res + 1)))
+    u.add_TopologyAttr("segids", ["A"])
+    u.load_new(frames, format=MemoryReader, dt=10.0)
+
+    topology = directory / "protein.pdb"
+    trajectory = directory / "protein.xtc"
+    u.atoms.write(str(topology))
+    with mda.Writer(str(trajectory), n_atoms=n_atoms) as w:
+        for _ts in u.trajectory:
+            w.write(u.atoms)
+
+    return str(topology), str(trajectory), {"n_res": n_res, "n_frames": n_frames}
+
+
 def reference_inertia_tensor(
     positions: np.ndarray, masses: np.ndarray
 ) -> np.ndarray:
