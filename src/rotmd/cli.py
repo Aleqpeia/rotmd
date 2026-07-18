@@ -462,6 +462,496 @@ def merge(inputs: list[Path], output: Path, force: bool) -> Path:
     return out
 
 
+def equilibrate(
+    inputs: list[Path],
+    output: Path,
+    column: str,
+    nskip: int | None,
+    method: str,
+    pool: bool,
+    force: bool,
+) -> Path:
+    """T3 — decide the production window and record it in ``window.json``."""
+    from rotmd.analysis.equilibration import build_window, pool_windows
+    from rotmd.io.meta import meta_path, read_json, update_meta, write_json
+    from rotmd.io.output import load_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    if pool:
+        windows = [read_json(p) for p in sorted(inputs)]
+        result = pool_windows(windows)
+        write_json(output, result)
+        print(
+            f"✓ {output}  (pooled {result['n_replicas']} replicas → "
+            f"t0 = {result['t0_ps']:.1f} ps, the latest across replicas)"
+        )
+        if not result["all_cross_checks_agree"]:
+            print("  ! at least one replica's cross-check disagreed — inspect before pooling")
+        return output
+
+    if len(inputs) != 1:
+        raise SystemExit(
+            f"equilibrate takes exactly one merged .npz (got {len(inputs)}); "
+            "use --pool to combine per-replica window.json files"
+        )
+
+    src = inputs[0]
+    data = load_npz(src)
+    if column not in data:
+        scalars = sorted(k for k, v in data.items() if v.ndim == 1 and k != "time_ps")
+        raise SystemExit(f"{src} has no column {column!r}. Available 1-D columns: {scalars}")
+
+    window = build_window(
+        data["time_ps"], data[column], column=column, nskip=nskip, method=method
+    )
+    window["source_npz"] = str(src)
+    write_json(output, window)
+
+    # Extend the replica sidecar so the window travels with the data.
+    sidecar = meta_path(src)
+    if sidecar.exists():
+        update_meta(sidecar, window=window)
+
+    xc = window["cross_check"]
+    print(
+        f"✓ {output}\n"
+        f"  t0 = {window['t0_ps']:.1f} ps (frame {window['t0_index']}), "
+        f"discarding {window['frac_discarded']:.1%} of {window['n_frames']} frames\n"
+        f"  g = {window['g']:.2f}, N_eff = {window['n_eff']:.0f}  [{window['method']}]\n"
+        f"  cross-check ({xc['method']}): t0 = {xc['t0_ps']:.1f} ps"
+    )
+    if not xc["agree"]:
+        print(
+            f"  ! estimators disagree by {xc['rel_diff']:.1%} of the trajectory "
+            f"(> {xc['tolerance']:.0%}) — plot the order parameter before trusting t0"
+        )
+    return output
+
+
+def dccm(
+    input_npz: Path, window_path: Path, output: Path, force: bool, max_blocks: int = 50
+) -> Path:
+    """T4 — dynamic cross-correlation map over the production window."""
+    from rotmd.analysis.dccm import compute_dccm
+    from rotmd.analysis.equilibration import apply_window
+    from rotmd.io.meta import read_json
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    data = load_npz(input_npz)
+    missing = [k for k in ("time_ps", "ca_coords", "ca_resids", "ca_align_mask") if k not in data]
+    if missing:
+        raise SystemExit(
+            f"{input_npz} lacks {missing} — it predates the CA arrays. "
+            "Re-run `rotmd extract` to regenerate it."
+        )
+
+    window = read_json(window_path)
+    frame_mask = apply_window(data["time_ps"], window)
+
+    # Blocks must be at least `g` frames long to count as independent samples
+    # for `rotmd compare`'s bootstrap; cap the count so each block still has
+    # enough frames to give a stable per-block map.
+    n_used = int(frame_mask.sum())
+    g = float(window.get("g", 1.0)) or 1.0
+    n_blocks = int(max(2, min(max_blocks, n_used // max(1, int(np.ceil(g))))))
+
+    result = compute_dccm(
+        data["ca_coords"],
+        data["ca_align_mask"],
+        data["ca_resids"],
+        frame_mask=frame_mask,
+        n_blocks=n_blocks,
+    )
+    result["t0_ps"] = np.float64(window["t0_ps"])
+    save_npz(output, result)
+
+    n_used = int(result["frames_used"])
+    off_diag = result["dcc"][~np.eye(len(result["dcc"]), dtype=bool)]
+    print(
+        f"✓ {output}\n"
+        f"  {result['dcc'].shape[0]} CA residues, {n_used}/{len(data['time_ps'])} frames "
+        f"(t0 = {window['t0_ps']:.1f} ps)\n"
+        f"  superposition converged in {int(result['align_iterations'])} iterations on "
+        f"{int(result['align_mask'].sum())} core atoms\n"
+        f"  off-diagonal correlation: mean {off_diag.mean():+.3f}, "
+        f"range [{off_diag.min():+.3f}, {off_diag.max():+.3f}]\n"
+        f"  {len(result['dcc_blocks'])} bootstrap blocks stored (g = {g:.1f})"
+    )
+    return output
+
+
+def dssp(
+    topology: Path,
+    trajectory: Path,
+    window_path: Path | None,
+    output: Path,
+    selection: str,
+    step: int,
+    force: bool,
+) -> Path:
+    """T8 — per-residue secondary-structure occupancy over the window."""
+    from rotmd.analysis.dssp import DSSP_CODES, compute_dssp
+    from rotmd.io.meta import read_json
+    from rotmd.io.output import save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    t0 = float(read_json(window_path)["t0_ps"]) if window_path else None
+    result = compute_dssp(
+        str(topology), str(trajectory), t0_ps=t0, selection=selection, step=step
+    )
+    save_npz(output, result)
+
+    occ = result["occupancy"]
+    mean_by_class = occ.mean(axis=0)
+    print(
+        f"✓ {output}\n"
+        f"  {occ.shape[0]} residues, {int(result['frames_used'])} frames "
+        f"(from frame {int(result['start_frame'])})\n"
+        "  mean occupancy: "
+        + ", ".join(f"{code}={mean_by_class[i]:.2f}" for i, code in enumerate(DSSP_CODES))
+    )
+    return output
+
+
+def local(
+    topology: Path,
+    trajectory: Path,
+    site: int,
+    output: Path,
+    window_path: Path | None,
+    merged: Path | None,
+    cutoff: float,
+    radius: float,
+    step: int,
+    force: bool,
+) -> Path:
+    """T5a — salt bridges, H-bonds and RMSF around the mutation site."""
+    from rotmd.analysis.dssp import first_frame_at_or_after
+    from rotmd.analysis.equilibration import apply_window
+    from rotmd.analysis.local import hydrogen_bonds, rmsf_per_residue, salt_bridges
+    from rotmd.io.meta import read_json
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    import MDAnalysis as mda
+
+    universe = mda.Universe(str(topology), str(trajectory))
+    window = read_json(window_path) if window_path else None
+    start = first_frame_at_or_after(universe, float(window["t0_ps"])) if window else 0
+
+    bridges = salt_bridges(universe, site, cutoff=cutoff, start=start, step=step)
+    payload: dict[str, np.ndarray] = {
+        "sb_resids": bridges["resids"],
+        "sb_occupancy": bridges["occupancy"],
+        "sb_any_occupancy": bridges["any_occupancy"],
+        "sb_cutoff": bridges["cutoff"],
+        "n_frames": bridges["n_frames"],
+        "site": np.int64(site),
+    }
+
+    try:
+        hbonds = hydrogen_bonds(universe, site, radius=radius, start=start, step=step)
+        payload["hb_pairs"] = hbonds["pairs"]
+        payload["hb_occupancy"] = hbonds["occupancy"]
+    except ValueError as exc:
+        print(f"  ! hydrogen bonds skipped: {exc}")
+
+    # RMSF comes from the extracted CA arrays so it uses the same superposition
+    # (and the same window) as the DCCM it will be read alongside.
+    if merged is not None:
+        data = load_npz(merged)
+        frame_mask = apply_window(data["time_ps"], window) if window else None
+        rmsf = rmsf_per_residue(
+            data["ca_coords"], data["ca_align_mask"], data["ca_resids"], frame_mask
+        )
+        payload["rmsf"] = rmsf["rmsf"]
+        payload["rmsf_resids"] = rmsf["resids"]
+
+    save_npz(output, payload)
+
+    top = [
+        f"{int(r)}:{o:.0%}"
+        for r, o in zip(bridges["resids"], bridges["occupancy"], strict=True)
+        if o > 0
+    ][:5]
+    print(
+        f"✓ {output}\n"
+        f"  site {site}: engaged with a carboxylate in "
+        f"{float(bridges['any_occupancy']):.1%} of {int(bridges['n_frames'])} frames\n"
+        f"  top partners: {', '.join(top) if top else 'none within cutoff'}"
+    )
+    if "rmsf" in payload:
+        print(f"  RMSF: mean {payload['rmsf'].mean():.2f} Å, max {payload['rmsf'].max():.2f} Å")
+    return output
+
+
+def apbs(
+    topology: Path,
+    trajectory: Path,
+    output: Path,
+    window_path: Path | None,
+    n_samples: int,
+    selection: str,
+    forcefield: str,
+    workdir: Path | None,
+    force: bool,
+) -> Path:
+    """T5c — ensemble-averaged Poisson-Boltzmann electrostatics."""
+    from rotmd.analysis.apbs import compute_pb_ensemble
+    from rotmd.io.meta import read_json
+    from rotmd.io.output import save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    t0 = float(read_json(window_path)["t0_ps"]) if window_path else None
+    result = compute_pb_ensemble(
+        str(topology), str(trajectory), t0_ps=t0, n_samples=n_samples,
+        selection=selection, forcefield=forcefield,
+        workdir=str(workdir) if workdir else None,
+    )
+    save_npz(output, {k: v for k, v in result.items() if k != "workdir"})
+
+    print(
+        f"✓ {output}\n"
+        f"  ΔG_elec = {float(result['mean_kcal']):.1f} ± {float(result['sem_kcal']):.1f} "
+        f"kcal/mol  (mean ± SEM over {int(result['n_frames_used'])} frames)\n"
+        f"  scratch: {result['workdir']}"
+    )
+    return output
+
+
+def coulomb(
+    structure: Path,
+    trajectory: Path,
+    topology_top: Path,
+    site: int,
+    output: Path,
+    window_path: Path | None,
+    radius: float,
+    selection: str,
+    workdir: Path | None,
+    force: bool,
+) -> Path:
+    """T5b — site/shell Coulomb + LJ decomposition from a GROMACS rerun."""
+    import tempfile
+
+    from rotmd.analysis.coulomb import coulomb_decomposition
+    from rotmd.io.meta import read_json
+    from rotmd.io.output import save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    g = 1.0
+    if window_path:
+        window = read_json(window_path)
+        g = float(window.get("g", 1.0))
+
+    scratch = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="rotmd-rerun-"))
+    result = coulomb_decomposition(
+        topology_top, structure, trajectory, site=site,
+        workdir=scratch, g=g, radius=radius, selection=selection,
+    )
+    save_npz(output, result)
+
+    lines = [
+        f"✓ {output}",
+        f"  site {site}: {int(result['group_site_atoms'])} atoms vs "
+        f"{int(result['group_shell_atoms'])} shell atoms within {radius} Å, "
+        f"{int(result['n_frames'])} frames",
+    ]
+    for kind, label in (("Coul_SR", "Coulomb (SR)"), ("LJ_SR", "Lennard-Jones (SR)")):
+        if f"{kind}_mean" in result:
+            mean = float(result[f"{kind}_mean"])
+            err = float(result[f"{kind}_stderr"])
+            marker = "" if abs(mean) > 2 * err else "   (not resolved above the noise)"
+            lines.append(
+                f"  {label:20s} {mean:9.2f} ± {err:.2f} kJ/mol "
+                f"[{int(result[f'{kind}_n_blocks'])} blocks × "
+                f"{int(result[f'{kind}_block_size'])} frames]{marker}"
+            )
+    print("\n".join(lines))
+    return output
+
+
+def compare(
+    system_a: list[Path],
+    system_b: list[Path],
+    output: Path,
+    label_a: str,
+    label_b: str,
+    site: int | None,
+    exclude_within: int,
+    n_boot: int,
+    alpha: float,
+    seed: int,
+    figure: Path | None,
+    force: bool,
+    dssp_a: list[Path] | None = None,
+    dssp_b: list[Path] | None = None,
+    dssp_figure: Path | None = None,
+) -> Path:
+    """T6 — ΔDCCM between two systems, with bootstrap significance."""
+    from rotmd.analysis.compare import compare_dccm
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    def _load(paths: list[Path], label: str):
+        maps, blocks, resids = [], [], None
+        for path in sorted(paths):
+            data = load_npz(path)
+            maps.append(data["dcc"])
+            if "dcc_blocks" in data:
+                blocks.append(data["dcc_blocks"])
+            if resids is None:
+                resids = data["resids"]
+            elif not np.array_equal(resids, data["resids"]):
+                raise SystemExit(
+                    f"{label}: {path} has different resids from the first replica — "
+                    "all replicas must share one residue numbering"
+                )
+        return maps, blocks, resids
+
+    maps_a, blocks_a, resids_a = _load(system_a, label_a)
+    maps_b, blocks_b, resids_b = _load(system_b, label_b)
+    if not np.array_equal(resids_a, resids_b):
+        raise SystemExit(
+            f"{label_a} and {label_b} have different residue numbering — "
+            "they cannot be compared cell by cell"
+        )
+
+    if not (blocks_a and blocks_b):
+        print("  ! no dcc_blocks found — reporting ΔDCCM without significance. "
+              "Re-run `rotmd dccm` to regenerate them.")
+
+    result = compare_dccm(
+        maps_a, maps_b, resids_a,
+        blocks_a=blocks_a or None, blocks_b=blocks_b or None,
+        site=site, exclude_within=exclude_within,
+        n_boot=n_boot, alpha=alpha, seed=seed,
+    )
+    save_npz(output, result)
+
+    delta = result["ddccm"]
+    off = ~np.eye(len(delta), dtype=bool)
+    lines = [
+        f"✓ {output}",
+        f"  {label_a}: {len(maps_a)} replicas   {label_b}: {len(maps_b)} replicas",
+        f"  |ΔDCCM| max {np.abs(delta[off]).max():.3f}, mean {np.abs(delta[off]).mean():.3f}",
+    ]
+    if "significant" in result:
+        frac = float(result["significant"][off].mean())
+        lines.append(
+            f"  {frac:.1%} of off-diagonal cells significant at alpha={alpha} "
+            f"({n_boot} block-bootstrap resamples)"
+        )
+    if "max_distal_change" in result:
+        lines.append(
+            f"  strongest significant distal change (|i − {site}| ≥ {exclude_within}): "
+            f"{float(result['max_distal_change']):.3f}"
+        )
+    print("\n".join(lines))
+
+    if figure is not None:
+        from rotmd.analysis.plots import plot_ddccm
+
+        plot_ddccm(result, figure, label_a=label_a, label_b=label_b,
+                   title=f"{label_b} vs {label_a}")
+        print(f"✓ {figure}")
+
+    # T8 hand-off: per-residue Δoccupancy, averaged over each system's replicas.
+    if dssp_a and dssp_b:
+        from rotmd.analysis.dssp import delta_occupancy
+
+        def _mean_occupancy(paths: list[Path]) -> tuple[np.ndarray, np.ndarray]:
+            loaded = [load_npz(p) for p in sorted(paths)]
+            return (
+                np.mean([d["occupancy"] for d in loaded], axis=0),
+                loaded[0]["resids"],
+            )
+
+        occ_a, dssp_resids = _mean_occupancy(dssp_a)
+        occ_b, _ = _mean_occupancy(dssp_b)
+        delta_occ = delta_occupancy(occ_a, occ_b)
+
+        save_npz(
+            output.with_name(f"{output.stem}_dssp.npz"),
+            {
+                "occupancy_a": occ_a, "occupancy_b": occ_b,
+                "delta_occupancy": delta_occ, "resids": dssp_resids,
+            },
+        )
+        biggest = int(np.argmax(np.abs(delta_occ).max(axis=1)))
+        print(
+            f"✓ {output.with_name(f'{output.stem}_dssp.npz')}\n"
+            f"  largest Δoccupancy at resid {int(dssp_resids[biggest])}: "
+            f"{np.abs(delta_occ[biggest]).max():+.2f}"
+        )
+
+        if dssp_figure is not None:
+            from rotmd.analysis.plots import plot_dssp_delta
+
+            plot_dssp_delta(
+                occ_a, occ_b, dssp_resids, dssp_figure,
+                label_a=label_a, label_b=label_b, site=site,
+                title=f"Secondary structure — {label_b} vs {label_a}",
+            )
+            print(f"✓ {dssp_figure}")
+
+    return output
+
+
+def methods(
+    mdp: list[str], topology: Path | None, structure: Path | None, outdir: Path, force: bool
+) -> Path:
+    """T7 — render methods.json + methods.md from the simulation inputs."""
+    from rotmd.analysis.methods import build_methods
+    from rotmd.io.meta import write_json
+
+    json_path = outdir / "methods.json"
+    md_path = outdir / "methods.md"
+    if json_path.exists() and not force:
+        print(f"✓ {json_path} exists — skipping (use --force to overwrite)")
+        return json_path
+
+    # Accept "name=path" to label stages explicitly, or a bare path whose stem
+    # becomes the label (em.mdp -> "em").
+    files: dict[str, Path] = {}
+    for item in mdp:
+        name, sep, path = item.partition("=")
+        chosen = Path(path) if sep else Path(name)
+        if not chosen.exists():
+            raise SystemExit(f"mdp file not found: {chosen}")
+        files[name if sep else chosen.stem] = chosen
+
+    payload, markdown = build_methods(files, topology, structure)
+    outdir.mkdir(parents=True, exist_ok=True)
+    write_json(json_path, payload)
+    md_path.write_text(markdown)
+
+    print(f"✓ {json_path}\n✓ {md_path}\n  stages: {', '.join(files)}")
+    return json_path
+
+
 def plot_equil(
     inputs: list[Path], outdir: Path, window_path: Path | None, force: bool
 ) -> Path:
@@ -519,8 +1009,69 @@ def main(argv: list[str] | None = None) -> int:
     p_merge.add_argument("-o", "--output", required=True, type=Path)
     p_merge.add_argument("--force", action="store_true")
 
+    p_eq = sub.add_parser(
+        "equilibrate",
+        help="Detect the production window → window.json",
+        description="Detect where equilibration ends, so every later analysis "
+                    "slices the same explicit, recorded frame range.",
+    )
+    p_eq.add_argument(
+        "inputs",
+        nargs="+",
+        type=Path,
+        help="One merged .npz, or several window.json files with --pool",
+    )
+    p_eq.add_argument("-o", "--output", required=True, type=Path, help="Output window.json")
+    p_eq.add_argument(
+        "--column", default="rmsd", help="1-D order parameter to analyse (default: rmsd)"
+    )
+    p_eq.add_argument(
+        "--nskip", type=int, default=None, help="Stride over candidate t0 (default: ~200 candidates)"
+    )
+    p_eq.add_argument(
+        "--method",
+        default="auto",
+        choices=["auto", "pymbar", "native"],
+        help="Estimator for the statistical inefficiency (default: pymbar if installed)",
+    )
+    p_eq.add_argument(
+        "--pool",
+        action="store_true",
+        help="Combine per-replica window.json files into one conservative common window",
+    )
+    p_eq.add_argument("--force", action="store_true")
 
+    p_dccm = sub.add_parser(
+        "dccm",
+        help="Dynamic cross-correlation map over the production window",
+        description="CA-CA displacement correlations after superposing every "
+                    "frame on the average structure over the alignment core.",
+    )
+    p_dccm.add_argument("input", type=Path, help="Merged .npz carrying ca_coords")
+    p_dccm.add_argument(
+        "--window", required=True, type=Path, help="window.json from `rotmd equilibrate`"
+    )
+    p_dccm.add_argument("-o", "--output", required=True, type=Path)
+    p_dccm.add_argument("--force", action="store_true")
 
+    p_methods = sub.add_parser(
+        "methods",
+        help="Auto-generate methods.json + methods.md from .mdp/topology",
+        description="Render the methods section from the files that actually "
+                    "produced the trajectories, so it cannot drift from them.",
+    )
+    p_methods.add_argument(
+        "--mdp",
+        action="append",
+        default=[],
+        metavar="[NAME=]PATH",
+        help="An .mdp stage; repeatable. 'nvt=nvt.mdp' labels it, a bare path "
+             "uses the filename stem. Order given is the order reported.",
+    )
+    p_methods.add_argument("--topology", type=Path, help="topol.top (force field, water, ions)")
+    p_methods.add_argument("--structure", type=Path, help="Any structure/tpr for atom count + box")
+    p_methods.add_argument("-o", "--outdir", required=True, type=Path)
+    p_methods.add_argument("--force", action="store_true")
 
     p_plot = sub.add_parser(
         "plot-equil",
@@ -535,10 +1086,99 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_plot.add_argument("--force", action="store_true")
 
+    p_cmp = sub.add_parser(
+        "compare",
+        help="ΔDCCM between two systems with bootstrap significance",
+        description="Pool replicas per system in Fisher-z space, difference the "
+                    "maps, and attach a block-bootstrap CI to every cell.",
+    )
+    p_cmp.add_argument("--a", nargs="+", required=True, type=Path, metavar="DCCM_NPZ",
+                       help="Reference system replicas (e.g. WT)")
+    p_cmp.add_argument("--b", nargs="+", required=True, type=Path, metavar="DCCM_NPZ",
+                       help="Comparison system replicas (e.g. the mutant)")
+    p_cmp.add_argument("-o", "--output", required=True, type=Path)
+    p_cmp.add_argument("--label-a", default="A")
+    p_cmp.add_argument("--label-b", default="B")
+    p_cmp.add_argument("--site", type=int, help="Mutation site for the distal view (e.g. 75)")
+    p_cmp.add_argument("--exclude-within", type=int, default=5,
+                       help="Residues within this distance of --site are masked (default: 5)")
+    p_cmp.add_argument("--n-boot", type=int, default=500)
+    p_cmp.add_argument("--alpha", type=float, default=0.05)
+    p_cmp.add_argument("--seed", type=int, default=0, help="Bootstrap seed (keeps runs reproducible)")
+    p_cmp.add_argument("--figure", type=Path, help="Also render the ΔDCCM heatmap here")
+    p_cmp.add_argument("--dssp-a", nargs="+", type=Path, help="dssp.npz replicas for system A")
+    p_cmp.add_argument("--dssp-b", nargs="+", type=Path, help="dssp.npz replicas for system B")
+    p_cmp.add_argument("--dssp-figure", type=Path, help="Render the Δoccupancy figure here")
+    p_cmp.add_argument("--force", action="store_true")
 
+    p_dssp = sub.add_parser(
+        "dssp",
+        help="Per-residue secondary-structure occupancy over the window",
+        description="Runs MDAnalysis' pure-Python DSSP (no external binary) and "
+                    "reduces per-frame assignments to per-residue occupancy.",
+    )
+    p_dssp.add_argument("topology", type=Path)
+    p_dssp.add_argument("trajectory", type=Path)
+    p_dssp.add_argument("-o", "--output", required=True, type=Path)
+    p_dssp.add_argument("--window", type=Path, help="window.json — analyse only post-t0 frames")
+    p_dssp.add_argument("--selection", default="protein")
+    p_dssp.add_argument("--step", type=int, default=1, help="Frame stride (DSSP is the slow part)")
+    p_dssp.add_argument("--force", action="store_true")
 
+    p_local = sub.add_parser(
+        "local",
+        help="Salt bridges / H-bonds / RMSF around the mutation site",
+        description="Heavy-atom salt-bridge occupancy per partner residue, the "
+                    "local hydrogen-bond network, and windowed RMSF.",
+    )
+    p_local.add_argument("topology", type=Path)
+    p_local.add_argument("trajectory", type=Path)
+    p_local.add_argument("--site", required=True, type=int, help="Residue of interest (e.g. 75)")
+    p_local.add_argument("-o", "--output", required=True, type=Path)
+    p_local.add_argument("--window", type=Path, help="window.json — analyse only post-t0 frames")
+    p_local.add_argument("--merged", type=Path, help="Merged .npz, adds RMSF from ca_coords")
+    p_local.add_argument("--cutoff", type=float, default=4.0, help="Salt-bridge cutoff Å (default 4)")
+    p_local.add_argument("--radius", type=float, default=10.0, help="H-bond shell radius Å")
+    p_local.add_argument("--step", type=int, default=1)
+    p_local.add_argument("--force", action="store_true")
 
+    p_apbs = sub.add_parser(
+        "apbs",
+        help="Ensemble Poisson-Boltzmann electrostatics (PDB2PQR + APBS)",
+        description="Polar solvation free energy averaged over frames sampled "
+                    "from the production window. Needs the external pdb2pqr30 "
+                    "and apbs binaries.",
+    )
+    p_apbs.add_argument("topology", type=Path)
+    p_apbs.add_argument("trajectory", type=Path)
+    p_apbs.add_argument("-o", "--output", required=True, type=Path)
+    p_apbs.add_argument("--window", type=Path, help="window.json — sample only post-t0 frames")
+    p_apbs.add_argument("--n-samples", type=int, default=50,
+                        help="Frames to sample across the window (default 50)")
+    p_apbs.add_argument("--selection", default="protein")
+    p_apbs.add_argument("--forcefield", default="CHARMM", help="PDB2PQR force field")
+    p_apbs.add_argument("--workdir", type=Path, help="Scratch dir (default: a temp dir)")
+    p_apbs.add_argument("--force", action="store_true")
 
+    p_coul = sub.add_parser(
+        "coulomb",
+        help="Per-residue Coulomb/LJ decomposition via `gmx mdrun -rerun`",
+        description="Re-evaluates the force field on existing frames with "
+                    "energygrps set, giving the site-shell Coulomb and LJ "
+                    "energies with block-averaged errors. Needs the topology "
+                    "that produced the trajectory.",
+    )
+    p_coul.add_argument("structure", type=Path, help="Structure matching the topology (.gro)")
+    p_coul.add_argument("trajectory", type=Path, help="Frames to re-evaluate (.xtc/.trr)")
+    p_coul.add_argument("--top", required=True, type=Path, dest="topology_top",
+                        help="topol.top matching the trajectory atom-for-atom")
+    p_coul.add_argument("--site", required=True, type=int)
+    p_coul.add_argument("-o", "--output", required=True, type=Path)
+    p_coul.add_argument("--window", type=Path, help="window.json — supplies g for block errors")
+    p_coul.add_argument("--radius", type=float, default=10.0, help="Shell radius Å (default 10)")
+    p_coul.add_argument("--selection", default="protein")
+    p_coul.add_argument("--workdir", type=Path)
+    p_coul.add_argument("--force", action="store_true")
 
     args = parser.parse_args(argv)
 
@@ -567,8 +1207,65 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "merge":
         merge(args.inputs, args.output, args.force)
         return 0
+    if args.cmd == "equilibrate":
+        equilibrate(
+            args.inputs,
+            args.output,
+            column=args.column,
+            nskip=args.nskip,
+            method=args.method,
+            pool=args.pool,
+            force=args.force,
+        )
+        return 0
+    if args.cmd == "dccm":
+        dccm(args.input, args.window, args.output, args.force)
+        return 0
+    if args.cmd == "methods":
+        if not args.mdp:
+            raise SystemExit("methods needs at least one --mdp")
+        methods(args.mdp, args.topology, args.structure, args.outdir, args.force)
+        return 0
     if args.cmd == "plot-equil":
         plot_equil(args.inputs, args.outdir, args.window, args.force)
+        return 0
+    if args.cmd == "compare":
+        compare(
+            args.a, args.b, args.output,
+            label_a=args.label_a, label_b=args.label_b,
+            site=args.site, exclude_within=args.exclude_within,
+            n_boot=args.n_boot, alpha=args.alpha, seed=args.seed,
+            figure=args.figure, force=args.force,
+            dssp_a=args.dssp_a, dssp_b=args.dssp_b, dssp_figure=args.dssp_figure,
+        )
+        return 0
+    if args.cmd == "dssp":
+        dssp(
+            args.topology, args.trajectory, args.window, args.output,
+            selection=args.selection, step=args.step, force=args.force,
+        )
+        return 0
+    if args.cmd == "coulomb":
+        coulomb(
+            args.structure, args.trajectory, args.topology_top, args.site, args.output,
+            window_path=args.window, radius=args.radius, selection=args.selection,
+            workdir=args.workdir, force=args.force,
+        )
+        return 0
+    if args.cmd == "apbs":
+        apbs(
+            args.topology, args.trajectory, args.output,
+            window_path=args.window, n_samples=args.n_samples,
+            selection=args.selection, forcefield=args.forcefield,
+            workdir=args.workdir, force=args.force,
+        )
+        return 0
+    if args.cmd == "local":
+        local(
+            args.topology, args.trajectory, args.site, args.output,
+            window_path=args.window, merged=args.merged, cutoff=args.cutoff,
+            radius=args.radius, step=args.step, force=args.force,
+        )
         return 0
     parser.print_help()
     return 2
