@@ -27,9 +27,22 @@ Schema written per chunk:
     rg               (n_frames,)            Å
     rg_components    (n_frames, 3)
     asphericity, acylindricity, end_to_end  (n_frames,)
+    ca_coords        (n_frames, n_ca, 3)    Å, float32, COM-centred but NOT
+                                            rotationally aligned — downstream
+                                            stages choose their own reference
+    ca_resids        (n_ca,)                int32, resid per CA (time-invariant)
+    ca_align_mask    (n_ca,)                bool, --sel-align core   (time-invariant)
+    rmsd_dom         (n_frames, n_domains)  Å, per-domain, each self-superposed
     E_total, E_pol, E_nonpol                 (n_frames,)             kcal/mol
     E_per_residue    (n_frames, n_residues)
     K_trans          (n_frames,)            kcal/mol
+
+Optional stages degrade rather than fail, because the useful subset differs by
+trajectory type. A positions-only ``.xtc`` still gives orientation, structural
+and CA output (so DCCM/DSSP/RMSF all work); ``L/τ/ω/dL/dt`` and ``K_trans``
+additionally need velocities+forces (a ``.trr``), and the ``E_*`` fields
+additionally need ``freesasa``. Each chunk records what it actually contains in
+its ``<chunk>.meta.json`` sidecar.
 """
 
 from __future__ import annotations
@@ -55,6 +68,13 @@ class ExtractConfig:
     step: int
     n_workers: int | None
     force: bool
+    # --- T1 additions -------------------------------------------------------
+    sel_ca: str = "name CA"
+    sel_align: str = ""
+    domains: str = ""
+    system: str = ""
+    replica: int | None = None
+    no_energy: bool = False
 
 
 def _add_extract_args(p: argparse.ArgumentParser) -> None:
@@ -86,6 +106,33 @@ def _add_extract_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--force", action="store_true", help="Overwrite existing output (default: skip)"
     )
+    p.add_argument(
+        "--sel-ca",
+        default="name CA",
+        help="CA selection, applied WITHIN --selection. Drives ca_coords/resids "
+             "and everything downstream (DCCM, RMSF). Default: 'name CA'",
+    )
+    p.add_argument(
+        "--sel-align",
+        default="",
+        help="Stable-core subset of --sel-ca used as the superposition reference "
+             "downstream (e.g. 'resid 20-90'). Empty = use all CA atoms. Excluding "
+             "flexible termini here keeps their wobble out of every later alignment.",
+    )
+    p.add_argument(
+        "--domains",
+        default="",
+        help="Per-domain RMSD spec: 'EF1:20-35,EF2:56-70' or a .json file. "
+             "'+' joins discontiguous spans (N-lobe:1-40+55-70).",
+    )
+    p.add_argument("--system", default="", help="System label recorded in meta.json (e.g. wt)")
+    p.add_argument("--replica", type=int, default=None, help="Replica index recorded in meta.json")
+    p.add_argument(
+        "--no-energy",
+        action="store_true",
+        help="Skip the freesasa energy stage. Implied automatically when freesasa "
+             "is unavailable or the trajectory carries no velocities.",
+    )
 
 
 def _load_reference(config: ExtractConfig, masses: np.ndarray) -> np.ndarray:
@@ -108,6 +155,75 @@ def _load_reference(config: ExtractConfig, masses: np.ndarray) -> np.ndarray:
     return pos - com
 
 
+def _ca_indexing(config: ExtractConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Locate the CA subset inside ``--selection``.
+
+    Returns ``(ca_mask, ca_resids, align_mask)`` where ``ca_mask`` indexes the
+    extracted atom axis and ``align_mask`` indexes the CA axis.
+
+    Both masks are stored in the chunk so downstream stages never need the
+    topology again: ``ca_mask`` slices ``positions`` to ``ca_coords`` here, and
+    ``align_mask`` tells DCCM which CA atoms define the superposition core.
+    """
+    import MDAnalysis as mda
+
+    u = mda.Universe(str(config.topology))
+    sel = u.select_atoms(config.selection)
+    ca = sel.select_atoms(config.sel_ca)
+    if len(ca) == 0:
+        raise ValueError(
+            f"--sel-ca {config.sel_ca!r} selects no atoms within --selection "
+            f"{config.selection!r} ({len(sel)} atoms)"
+        )
+
+    ca_mask = np.isin(sel.indices, ca.indices)
+    if config.sel_align:
+        align = ca.select_atoms(config.sel_align)
+        if len(align) == 0:
+            raise ValueError(
+                f"--sel-align {config.sel_align!r} selects no atoms within "
+                f"--sel-ca {config.sel_ca!r} ({len(ca)} CA atoms)"
+            )
+        align_mask = np.isin(ca.indices, align.indices)
+    else:
+        align_mask = np.ones(len(ca), dtype=bool)
+
+    return ca_mask, ca.resids.astype(np.int32), align_mask
+
+
+def _freesasa_available() -> bool:
+    """Whether the energy stage can run at all.
+
+    freesasa is sdist-only on Linux (needs a compiler), so it is routinely
+    absent on an air-gapped cluster where the rest of rotmd installs fine from
+    wheels. Extract degrades to a no-energy chunk rather than failing the whole
+    SLURM array over an optional stage.
+    """
+    from importlib.util import find_spec
+
+    return find_spec("freesasa") is not None
+
+
+def _check_membrane_sel(config: ExtractConfig) -> None:
+    """Fail fast on a membrane selection that matches nothing.
+
+    The energy stage resolves ``--membrane-sel`` only at phase 7/7, so without
+    this an hour of loading, structural and orientation work is thrown away at
+    the very last step — and nothing is written. Checked here against the
+    topology alone (cheap, no trajectory) so a typo'd selection costs seconds,
+    matching how ``_ca_indexing`` already validates its own selections.
+    """
+    import MDAnalysis as mda
+
+    u = mda.Universe(str(config.topology))
+    if len(u.select_atoms(config.membrane_sel)) == 0:
+        raise ValueError(
+            f"--membrane-sel {config.membrane_sel!r} selects no atoms in "
+            f"{config.topology.name}. Pass the selection matching your lipids, "
+            f"or --no-energy if this system has no membrane."
+        )
+
+
 def _flatten_observables(obs: dict) -> dict[str, np.ndarray]:
     """Flatten {name: VectorObservable} into npz-serializable arrays."""
     out: dict[str, np.ndarray] = {}
@@ -128,15 +244,21 @@ def extract(config: ExtractConfig) -> Path:
         print(f"✓ {config.output} exists — skipping (use --force to overwrite)")
         return config.output
 
-    from rotmd.core.orientation import extract_orientation_trajectory, membrane_tilt_angle
+    from rotmd.analysis.domains import domain_masks, parse_domains
     from rotmd.core.inertia import principal_axes
-    from rotmd.io.gromacs import load_gromacs_trajectory, compute_trajectory_energies
+    from rotmd.core.orientation import extract_orientation_trajectory, membrane_tilt_angle
+    from rotmd.io.gromacs import compute_trajectory_energies, load_gromacs_trajectory
+    from rotmd.io.meta import meta_path, write_json
     from rotmd.io.output import save_npz
-    from rotmd.observables.unified import compute_all_observables
-    from rotmd.observables.structural import compute_structural_trajectory
     from rotmd.observables.energetics import kinetic_energy_translational
+    from rotmd.observables.structural import compute_rmsd_trajectory, compute_structural_trajectory
+    from rotmd.observables.unified import compute_all_observables
 
-    print(f"[1/6] Loading {config.trajectory.name} [{config.start}:{config.stop}:{config.step}]")
+    # Validate every selection before the expensive work, not after it.
+    if not config.no_energy and _freesasa_available():
+        _check_membrane_sel(config)
+
+    print(f"[1/7] Loading {config.trajectory.name} [{config.start}:{config.stop}:{config.step}]")
     traj = load_gromacs_trajectory(
         str(config.topology),
         str(config.trajectory),
@@ -149,56 +271,87 @@ def extract(config: ExtractConfig) -> Path:
     n_frames = traj["n_frames"]
     print(f"      {n_frames} frames, {traj['n_atoms']} atoms")
 
-    print("[2/6] Reference + structural (RMSD, Rg)")
+    print("[2/7] CA indexing (ca_coords, alignment core)")
+    ca_mask, ca_resids, align_mask = _ca_indexing(config)
+    # float32 halves the on-disk cost of the largest per-chunk array; CA
+    # coordinates are ~0.001 Å-precise in the trajectory anyway, far below
+    # float32's ~1e-4 Å resolution at protein length scales.
+    ca_coords = traj["positions"][:, ca_mask, :].astype(np.float32)
+    print(f"      {ca_coords.shape[1]} CA atoms, {int(align_mask.sum())} in the alignment core")
+
+    print("[3/7] Reference + structural (RMSD, Rg) + per-domain RMSD")
     reference = _load_reference(config, traj["masses"])
     structural = compute_structural_trajectory(
         traj["positions"], traj["masses"], reference=reference, verbose=False
     )
+    domains = parse_domains(config.domains)
+    domain_names = list(domains)
+    if domains:
+        masks = domain_masks(ca_resids, domains)
+        ref_ca = reference[ca_mask]
+        ca_masses = traj["masses"][ca_mask]
+        # Each domain is superposed on itself, so the column reports that
+        # domain's internal deformation rather than its rigid-body motion
+        # relative to the rest of the protein.
+        rmsd_dom = np.column_stack([
+            compute_rmsd_trajectory(
+                ca_coords[:, masks[name]], ref_ca[masks[name]], ca_masses[masks[name]], align=True
+            )
+            for name in domain_names
+        ])
+        print(f"      domains: {', '.join(f'{n}({int(masks[n].sum())})' for n in domain_names)}")
+    else:
+        rmsd_dom = np.zeros((n_frames, 0))
 
-    print("[3/6] Orientation (ZYZ Euler, rotation matrices)")
+    print("[4/7] Orientation (ZYZ Euler, rotation matrices)")
     euler, R = extract_orientation_trajectory(traj["positions"], traj["masses"])
 
-    print("[4/6] Principal axes")
+    print("[5/7] Principal axes")
     axes = np.zeros((n_frames, 3, 3))
     moments = np.zeros((n_frames, 3))
     for i in range(n_frames):
         moments[i], axes[i] = principal_axes(traj["inertia_tensor"][i])
 
-    print("[5/6] Vector observables (L, τ, ω, dL/dt)")
-    if traj["velocities"] is None or traj["forces"] is None:
-        raise RuntimeError(
-            "trajectory lacks velocities and/or forces — required for "
-            "L/τ/ω. Re-run gmx mdrun with nstvout/nstfout > 0."
+    # L/τ/ω need velocities *and* forces, i.e. a .trr written with
+    # nstvout/nstfout > 0. A positions-only .xtc still yields everything the
+    # DCCM / structural / DSSP path needs, so this degrades instead of raising.
+    has_dynamics = traj["velocities"] is not None and traj["forces"] is not None
+    obs = None
+    if has_dynamics:
+        print("[6/7] Vector observables (L, τ, ω, dL/dt)")
+        obs = compute_all_observables(
+            positions=traj["positions"],
+            velocities=traj["velocities"],
+            forces=traj["forces"],
+            masses=traj["masses"],
+            inertia_tensors=traj["inertia_tensor"],
+            principal_axes=axes,
+            membrane_normal=np.array([0.0, 0.0, 1.0]),
+            times=traj["times"],
+            verbose=False,
+            com=traj["com"],
         )
-    membrane_normal = np.array([0.0, 0.0, 1.0])
-    obs = compute_all_observables(
-        positions=traj["positions"],
-        velocities=traj["velocities"],
-        forces=traj["forces"],
-        masses=traj["masses"],
-        inertia_tensors=traj["inertia_tensor"],
-        principal_axes=axes,
-        membrane_normal=membrane_normal,
-        times=traj["times"],
-        verbose=False,
-        com=traj["com"],
-    )
+    else:
+        print("[6/7] Vector observables — SKIPPED (no velocities/forces in trajectory)")
 
-    print("[6/6] Energies (SASA + simplified electrostatic, parallel)")
-    energies = compute_trajectory_energies(
-        str(config.topology),
-        str(config.trajectory),
-        selection=config.selection,
-        membrane_sel=config.membrane_sel,
-        start=config.start,
-        stop=config.stop,
-        step=config.step,
-        n_workers=config.n_workers,
-        verbose=False,
-    )
-    K_trans = np.array(
-        [kinetic_energy_translational(traj["velocities"][i], traj["masses"]) for i in range(n_frames)]
-    )
+    energies = None
+    if config.no_energy:
+        print("[7/7] Energies — SKIPPED (--no-energy)")
+    elif not _freesasa_available():
+        print("[7/7] Energies — SKIPPED (freesasa not installed)")
+    else:
+        print("[7/7] Energies (SASA + simplified electrostatic, parallel)")
+        energies = compute_trajectory_energies(
+            str(config.topology),
+            str(config.trajectory),
+            selection=config.selection,
+            membrane_sel=config.membrane_sel,
+            start=config.start,
+            stop=config.stop,
+            step=config.step,
+            n_workers=config.n_workers,
+            verbose=False,
+        )
 
     data: dict[str, np.ndarray] = {
         "time_ps": traj["times"].astype(np.float64),
@@ -221,26 +374,73 @@ def extract(config: ExtractConfig) -> Path:
         "asphericity": structural["asphericity"],
         "acylindricity": structural["acylindricity"],
         "end_to_end": structural["end_to_end"],
-        "E_total": energies["Etot"],
-        "E_pol": energies["Epol"],
-        "E_nonpol": energies["Enonpol"],
-        "E_per_residue": energies["per_residue"],
-        "K_trans": K_trans,
+        # --- T1: CA subsystem, consumed by dccm / rmsf without re-reading the
+        # trajectory. Time-invariant keys (ca_resids, ca_align_mask) are stored
+        # once per chunk and deduplicated by `rotmd merge`.
+        "ca_coords": ca_coords,
+        "ca_resids": ca_resids,
+        "ca_align_mask": align_mask,
+        "rmsd_dom": rmsd_dom,
     }
     if traj["velocities"] is not None:
         data["velocities"] = traj["velocities"]
+        data["K_trans"] = np.array([
+            kinetic_energy_translational(traj["velocities"][i], traj["masses"])
+            for i in range(n_frames)
+        ])
     if traj["forces"] is not None:
         data["forces"] = traj["forces"]
-    data.update(_flatten_observables(obs))
+    if obs is not None:
+        data.update(_flatten_observables(obs))
+    if energies is not None:
+        data["E_total"] = energies["Etot"]
+        data["E_pol"] = energies["Epol"]
+        data["E_nonpol"] = energies["Enonpol"]
+        data["E_per_residue"] = energies["per_residue"]
 
     out = save_npz(config.output, data)
+
+    times = traj["times"]
+    meta = {
+        "system": config.system or None,
+        "replica": config.replica,
+        "n_frames": int(n_frames),
+        "n_atoms": int(traj["n_atoms"]),
+        "dt_ps": float(np.median(np.diff(times))) if n_frames > 1 else None,
+        "t_start_ps": float(times[0]),
+        "t_end_ps": float(times[-1]),
+        "selection": config.selection,
+        "sel_ca": config.sel_ca,
+        "sel_align": config.sel_align or config.sel_ca,
+        "n_ca": int(ca_coords.shape[1]),
+        "n_align": int(align_mask.sum()),
+        "domains": {n: [list(s) for s in domains[n]] for n in domain_names},
+        "domain_names": domain_names,
+        "has_velocities": bool(traj["velocities"] is not None),
+        "has_forces": bool(traj["forces"] is not None),
+        "has_energy": energies is not None,
+        "source": {
+            "topology": str(config.topology),
+            "trajectory": str(config.trajectory),
+            "reference": str(config.reference),
+            "start": config.start,
+            "stop": config.stop,
+            "step": config.step,
+        },
+        # Filled in by `rotmd equilibrate` (T3); every later stage reads it.
+        "window": None,
+    }
+    write_json(meta_path(out), meta)
+
     size_mb = out.stat().st_size / (1024**2)
     print(f"✓ {out}  ({size_mb:.1f} MB, {n_frames} frames)")
+    print(f"✓ {meta_path(out)}")
     return out
 
 
 def merge(inputs: list[Path], output: Path, force: bool) -> Path:
-    from rotmd.io.output import merge_npz
+    from rotmd.io.meta import merge_meta, meta_path, read_json, write_json
+    from rotmd.io.output import load_npz, merge_npz
 
     if output.exists() and not force:
         print(f"✓ {output} exists — skipping (use --force to overwrite)")
@@ -250,6 +450,15 @@ def merge(inputs: list[Path], output: Path, force: bool) -> Path:
     out = merge_npz(inputs, output)
     size_mb = out.stat().st_size / (1024**2)
     print(f"✓ {out}  ({size_mb:.1f} MB)")
+
+    # Collapse the per-chunk sidecars into one per-replica sidecar, so
+    # `rotmd equilibrate` has a single meta.json to extend. Chunks predating
+    # T1 have no sidecar; that is not fatal, the merged npz is still valid.
+    metas = [read_json(meta_path(p)) for p in inputs if meta_path(p).exists()]
+    if metas:
+        merged_meta = merge_meta(metas, load_npz(out)["time_ps"])
+        write_json(meta_path(out), merged_meta)
+        print(f"✓ {meta_path(out)}")
     return out
 
 
@@ -264,6 +473,15 @@ def main(argv: list[str] | None = None) -> int:
     p_merge.add_argument("inputs", nargs="+", type=Path)
     p_merge.add_argument("-o", "--output", required=True, type=Path)
     p_merge.add_argument("--force", action="store_true")
+
+
+
+
+
+
+
+
+
 
     args = parser.parse_args(argv)
 
@@ -280,6 +498,12 @@ def main(argv: list[str] | None = None) -> int:
             step=args.step,
             n_workers=args.n_workers,
             force=args.force,
+            sel_ca=args.sel_ca,
+            sel_align=args.sel_align,
+            domains=args.domains,
+            system=args.system,
+            replica=args.replica,
+            no_energy=args.no_energy,
         )
         extract(cfg)
         return 0

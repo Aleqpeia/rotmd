@@ -152,3 +152,19 @@ presentation/plots/wt/torque_field_empirical.png
 presentation/plots/wt/total energy_energy_vs_angular_momentum.png
 presentation/plots/wt/total energy_phase_space.png
 presentation/plots/wt/trajectory_theta_psi.png
+
+# --- build artefacts & offline deployment bundles (never commit; ~1 GB) ---
+dist/
+wheels/
+rotmd-offline/
+rotmd-offline.tar.gz
+rotmd-kernel.tar
+io.mc
+
+# --- editor / desktop / local tooling ---
+.idea/
+.directory
+.claude/
+
+# --- notebooks stay out of version control (per project decision) ---
+notebooks/
