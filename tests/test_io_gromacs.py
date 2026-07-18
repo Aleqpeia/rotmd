@@ -46,6 +46,18 @@ def test_load_respects_frame_slicing(tmp_path):
     assert data["times"].shape == (2,)
 
 
+def test_load_zero_frame_slice_raises(tmp_path):
+    """A --start past the end must say so, not fail later inside numba.
+
+    An empty frame list becomes a 1-D ``(0,)`` array, and the numba kernels
+    then reject it with "Unknown attribute 'shape' of type float64" — a message
+    that points at the kernel instead of at the real cause.
+    """
+    top, trj, _ = write_synthetic_gromacs(tmp_path, n_frames=6)
+    with pytest.raises(ValueError, match="selects 0 of the 6 frames"):
+        load_gromacs_trajectory(top, trj, selection="all", start=1001, step=10, verbose=False)
+
+
 def test_load_zero_atom_selection_raises(tmp_path):
     top, trj, _ = write_synthetic_gromacs(tmp_path, n_frames=2)
     with pytest.raises(ValueError, match="0 atoms"):

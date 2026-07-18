@@ -8,6 +8,8 @@ than a self-consistency one.
 
 from __future__ import annotations
 
+from importlib.util import find_spec
+
 import numpy as np
 import pytest
 
@@ -103,6 +105,24 @@ def test_detection_is_deterministic():
 def test_auto_method_falls_back_to_native_without_pymbar():
     result = detect_equilibration(ar1(1000, 0.5, seed=5), method="auto")
     assert result["method"] in {"native", "pymbar"}
+
+
+@pytest.mark.skipif(find_spec("pymbar") is None, reason="pymbar not installed")
+def test_native_agrees_with_pymbar():
+    """The native estimator must not drift from the reference implementation.
+
+    Whether pymbar is installed is an accident of the deployment environment
+    (it is absent on the air-gapped cluster), so the two paths have to agree or
+    the same trajectory would yield a different equilibration window depending
+    on where it was analysed. ``t0`` must match exactly -- it sets the analysis
+    window -- while ``g`` is allowed a little slack for float summation order.
+    """
+    for phi in (0.0, 0.5, 0.9):
+        series = ar1(3000, phi, seed=11)
+        nat = detect_equilibration(series, method="native")
+        ref = detect_equilibration(series, method="pymbar")
+        assert nat["t0_index"] == ref["t0_index"], f"t0 differs at phi={phi}"
+        assert nat["g"] == pytest.approx(ref["g"], rel=1e-3), f"g differs at phi={phi}"
 
 
 def test_rejects_bad_input():

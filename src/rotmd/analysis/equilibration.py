@@ -91,7 +91,14 @@ def _detect_native(series: np.ndarray, nskip: int) -> tuple[int, float, float]:
 def _detect_pymbar(series: np.ndarray, nskip: int) -> tuple[int, float, float]:
     from pymbar import timeseries
 
-    t0, g, n_eff = timeseries.detect_equilibration(np.asarray(series, dtype=np.float64), nskip=nskip)
+    # fast=False, not pymbar's default: `fast=True` uses an increment-doubling
+    # approximation to the autocorrelation sum that overestimates g (on AR(1)
+    # phi=0.9 it returns 25.4 where the exact sum gives 22.6). The native path
+    # here always does the exact sum, so without this the reported g would jump
+    # by ~10% purely because pymbar happened to be installed.
+    t0, g, n_eff = timeseries.detect_equilibration(
+        np.asarray(series, dtype=np.float64), nskip=nskip, fast=False
+    )
     return int(t0), float(g), float(n_eff)
 
 

@@ -168,3 +168,6 @@ io.mc
 
 # --- notebooks stay out of version control (per project decision) ---
 notebooks/
+
+# notebooks are not version-controlled (per project decision)
+*.ipynb
