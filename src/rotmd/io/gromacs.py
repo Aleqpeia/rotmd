@@ -130,6 +130,16 @@ def load_gromacs_trajectory(
     times_list = []
 
     n_frames = len(u.trajectory[start:stop:step])
+    if n_frames == 0:
+        # Fail here, with the numbers, rather than letting an empty list become
+        # a 1-D (0,) array downstream: the numba kernels then report
+        # "Unknown attribute 'shape' of type float64", which says nothing about
+        # the actual cause — a --start past the end of this trajectory.
+        raise ValueError(
+            f"[{start}:{stop}:{step}] selects 0 of the {len(u.trajectory)} frames in "
+            f"{trajectory}. --start ({start}) is at or past the end of this "
+            f"trajectory, so there is nothing to extract."
+        )
     if verbose:
         print(f"  Phase 1: Loading {n_frames} frames (sequential I/O)...")
 

@@ -2,6 +2,9 @@
 
 A high-performance Python toolkit for analyzing protein rotational dynamics from molecular dynamics (MD) trajectories. Optimized with numba JIT compilation, JAX for automatic differentiation and parallelization, xarray for data management, and tqdm for progress tracking.
 
+**Docs:** https://aleqpeia.github.io/rotmd/ — or build locally with
+`poetry install --with docs && poetry run sphinx-build -b html docs/source docs/build/html`.
+
 ## Features
 
 ### Core Capabilities

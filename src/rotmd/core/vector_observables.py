@@ -14,7 +14,7 @@ Key Abstractions:
 -----------------
 1. VectorField: 3D vector at each frame (n_frames, 3)
 2. Decomposition: parallel, perpendicular, z-component
-3. Magnitudes: |v|, |v_∥|, |v_⊥|, etc.
+3. Magnitudes: ``|v|``, ``|v_par|``, ``|v_perp|``, etc.
 
 Backend Selection:
 - Default: Numba (CPU-optimized)
@@ -87,7 +87,7 @@ def compute_magnitudes(vectors: np.ndarray) -> np.ndarray:
         vectors: (n_frames, 3) or (n_frames, n_atoms, 3) vector field
 
     Returns:
-        magnitudes: (n_frames,) or (n_frames, n_atoms) |v|
+        magnitudes: (n_frames,) or (n_frames, n_atoms) ``|v|``
 
     Examples:
         >>> vectors = np.array([[3, 4, 0], [5, 12, 0]])
@@ -150,10 +150,10 @@ class VectorObservable:
         parallel: (n_frames, 3) component parallel to reference
         perp: (n_frames, 3) component perpendicular to reference
         z_component: (n_frames, 3) component along z-axis (membrane normal)
-        magnitude: (n_frames,) |vector|
-        parallel_mag: (n_frames,) |parallel|
-        perp_mag: (n_frames,) |perp|
-        z_mag: (n_frames,) |z_component|
+        magnitude: (n_frames,) ``|vector|``
+        parallel_mag: (n_frames,) ``|parallel|``
+        perp_mag: (n_frames,) ``|perp|``
+        z_mag: (n_frames,) ``|z_component|``
         times: (n_frames,) time values
         name: Observable name (L, omega, tau, etc.)
 
