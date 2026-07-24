@@ -171,3 +171,7 @@ notebooks/
 
 # notebooks are not version-controlled (per project decision)
 *.ipynb
+
+# --- Sphinx docs build output & autosummary stubs (generated, not source) ---
+docs/build/
+docs/source/api/generated/

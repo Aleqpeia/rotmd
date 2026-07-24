@@ -8,9 +8,7 @@ nside = 2  # number of leaflets in a bilayer !!!
 
 def find_min_dist(pos, pos_grp):
     """
-    ----------
-    Find min dist between a position vector and a group of position vectors
-    ----------
+    Find min dist between a position vector and a group of position vectors.
 
     input
       pos     : position vector
@@ -34,9 +32,7 @@ def find_min_dist(pos, pos_grp):
 
 def assign_groups_to_leaflets(sel_grp, ngroups):
     """
-    ----------
     Put 3rd+ group members to the appropriate 1st or 2nd groups based on min. dist.
-    ----------
 
     input
           sel_grp: atom group list array
@@ -77,9 +73,8 @@ def assign_groups_to_leaflets(sel_grp, ngroups):
 
 def assign_leaflet_zpos(u, atomgroup):
     """
-    ----------
     Assign leaflets based on z-positions of atoms.
-    ----------
+
     Membrane normal is assumed to be parallel to the z-axis.
     zcent = (zmin + zmax)/2 is set to be a reference z-value for assignment.
     zmin and zmax are minimum and maximum z-positions of the selected atoms.
@@ -117,9 +112,7 @@ def assign_leaflet_zpos(u, atomgroup):
 
 def assign_leaflet_mda(u, atomgroup):
     """
-    ----------
     Simple leaflet assignment using the default setting of LeafletFinder from MDA.
-    ----------
 
     input
           u        : MDA Universe
@@ -142,9 +135,7 @@ def assign_leaflet_mda(u, atomgroup):
 
 def assign_leaflet_simple(u, atomgroup):
     """
-    ----------
     A hybrid stride-bisection method for leaflet assignment.
-    ----------
 
     input
           u        : MDA Universe
@@ -234,9 +225,8 @@ def assign_leaflet_simple(u, atomgroup):
 
 def assign_leaflet(u, atomgroup):
     """
-    ----------
     Assign leaflet using a hybdird stride-bisection method when necessary.
-    ----------
+
     NOTE: IN typical situations that chosen atoms are appropriate for lipid tails,
           leaflets should have comparable numbers of atoms.
 

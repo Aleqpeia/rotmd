@@ -126,7 +126,7 @@ def radius_of_gyration(
     """
     Compute radius of gyration.
 
-    R_g = sqrt(Σ m_i |r_i - r_com|² / Σ m_i)
+    ``R_g = sqrt(sum_i m_i |r_i - r_com|^2 / sum_i m_i)``
 
     Args:
         positions: (n_atoms, 3) atomic positions in Å

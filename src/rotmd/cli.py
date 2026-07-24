@@ -6,7 +6,7 @@ not stream multiple chunks internally — concatenation is a separate
 ``rotmd merge`` command, so the natural unit of SLURM array work matches
 the natural unit of output.
 
-Schema written per chunk:
+Schema written per chunk::
 
     time_ps          (n_frames,)            absolute trajectory time, ps
     masses           (n_atoms,)             amu

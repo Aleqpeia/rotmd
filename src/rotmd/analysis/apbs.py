@@ -12,9 +12,11 @@ at the solute dielectric (``sdie = pdie``). The grid, centring and charge
 assignment cancel between them, so the difference is a real solvation free
 energy rather than a grid artefact.
 
-External tools (not Python dependencies):
+External tools (not Python dependencies)::
+
     pdb2pqr30   assigns CHARMM charges/radii and adds missing hydrogens
     apbs        solves the linearised PB equation
+
 Both are located at run time; their absence is reported, never silently
 skipped.
 """
