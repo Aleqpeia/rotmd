@@ -18,8 +18,8 @@ Schema written per chunk::
     axes             (n_frames, 3, 3)       principal axes (columns)
     moments          (n_frames, 3)          principal moments
     phi, theta, psi  (n_frames,)            ZYZ Euler, rad
-    tilt             (n_frames,)            tilt vs membrane surface, rad [0, π/2]
-                                            (π/2 = axis ∥ normal, 0 = axis in plane)
+    tilt             (n_frames,)            tilt from the membrane normal, rad [0, π/2]
+                                            (0 = axis ∥ normal, π/2 = axis in plane)
     rotation_matrices (n_frames, 3, 3)
     {L,tau,omega,dLdt}_{vector,parallel,perp,z_component}            (n_frames, 3)
     {L,tau,omega,dLdt}_{magnitude,parallel_mag,perp_mag,z_mag}       (n_frames,)
@@ -364,8 +364,8 @@ def extract(config: ExtractConfig) -> Path:
         "phi": euler[:, 0],
         "theta": euler[:, 1],
         "psi": euler[:, 2],
-        # Convenience tilt vs. the membrane surface: 90° = principal axis
-        # collinear with the membrane normal, 0° = lying in the plane.
+        # Convenience tilt from the membrane normal: 0° = principal axis
+        # collinear with the normal, 90° = lying in the membrane plane.
         "tilt": membrane_tilt_angle(euler[:, 1]),
         "rotation_matrices": R,
         "rmsd": structural["rmsd"],
@@ -695,6 +695,423 @@ def local(
     )
     if "rmsf" in payload:
         print(f"  RMSF: mean {payload['rmsf'].mean():.2f} Å, max {payload['rmsf'].max():.2f} Å")
+    return output
+
+
+def _optional_window(time_ps: np.ndarray, window_path: Path | None) -> tuple[np.ndarray, float | None]:
+    """``(frame_mask, t0_ps)`` from ``--window``, or the whole trajectory if none was given."""
+    if window_path is None:
+        return np.ones(len(time_ps), dtype=bool), None
+    from rotmd.analysis.equilibration import apply_window
+    from rotmd.io.meta import read_json
+
+    window = read_json(window_path)
+    return apply_window(time_ps, window), float(window["t0_ps"])
+
+
+def _frame_count_line(frame_mask: np.ndarray, t0_ps: float | None) -> str:
+    """"  N frames post t0=... ps" or "...(no --window given)", for the printed summary."""
+    n = int(frame_mask.sum())
+    if t0_ps is None:
+        return f"  {n} frames (no --window given — using the whole trajectory)"
+    return f"  {n} frames post t0={t0_ps:.1f} ps"
+
+
+def _recentre_psi(psi: np.ndarray) -> np.ndarray:
+    """Shift psi by pi so a cluster straddling the 0/2*pi wrap lands at the middle of the plotted range instead.
+
+    Purely a relabelling — psi is uniform on SO(2), so this doesn't touch the
+    PMF/friction Jacobian (unlike the theta -> tilt fold, which does). Applied
+    once here so every consumer (npz output, printed summary, figure) agrees.
+    """
+    return (np.asarray(psi, dtype=np.float64) + np.pi) % (2 * np.pi)
+
+
+def correlations(
+    input_npz: Path,
+    window_path: Path | None,
+    output: Path,
+    component: str | None,
+    max_lag: int | None,
+    force: bool,
+    figure: Path | None = None,
+) -> Path:
+    """Angular velocity/momentum autocorrelation and correlation time, optionally windowed."""
+    from rotmd.analysis.correlations import angular_momentum_acf, angular_velocity_acf
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    data = load_npz(input_npz)
+    missing = [k for k in ("time_ps", "omega_vector") if k not in data]
+    if missing:
+        raise SystemExit(
+            f"{input_npz} lacks {missing} — needs velocities (a .trr) at extract time."
+        )
+
+    frame_mask, t0_ps = _optional_window(data["time_ps"], window_path)
+    times = data["time_ps"][frame_mask]
+
+    omega = angular_velocity_acf(
+        data["omega_vector"][frame_mask], times, max_lag=max_lag, component=component
+    )
+    result: dict[str, np.ndarray] = {f"omega_{k}": v for k, v in omega.items()}
+
+    summary = f"omega tau_c = {omega['tau_c']:.2f} ps"
+    if "L_vector" in data:
+        l_result = angular_momentum_acf(data["L_vector"][frame_mask], times, max_lag=max_lag)
+        result.update({f"L_{k}": v for k, v in l_result.items()})
+        summary += f", L tau_c = {l_result['tau_c']:.2f} ps"
+
+    result["t0_ps"] = np.float64(t0_ps if t0_ps is not None else np.nan)
+    save_npz(output, result)
+
+    print(f"✓ {output}\n{_frame_count_line(frame_mask, t0_ps)}\n  {summary}")
+
+    if figure is not None:
+        from rotmd.viz import plot_autocorrelation, plot_multiple_acfs
+
+        if "L_acf" in result:
+            plot_multiple_acfs(
+                result["omega_times"], {"omega": result["omega_acf"], "L": result["L_acf"]},
+                output=figure, title=input_npz.stem,
+            )
+        else:
+            plot_autocorrelation(
+                result["omega_times"], result["omega_acf"],
+                tau=float(result["omega_tau_c"]), output=figure, title=input_npz.stem,
+            )
+        print(f"✓ {figure}")
+
+    return output
+
+
+def friction(
+    input_npz: Path,
+    window_path: Path | None,
+    output: Path,
+    theta_bins: int,
+    psi_bins: int,
+    min_samples_per_bin: int,
+    force: bool,
+    figure: Path | None = None,
+) -> Path:
+    """Orientation-dependent friction gamma(tilt, psi) and spin/nutation anisotropy, optionally windowed."""
+    from rotmd.analysis.correlations import autocorrelation_function
+    from rotmd.analysis.friction import anisotropic_friction_tensor, orientation_dependent_friction
+    from rotmd.core.orientation import fold_tilt_and_psi
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    data = load_npz(input_npz)
+    required = (
+        "time_ps", "theta", "psi", "omega_vector",
+        "omega_parallel_mag", "omega_perp_mag", "moments",
+    )
+    missing = [k for k in required if k not in data]
+    if missing:
+        raise SystemExit(
+            f"{input_npz} lacks {missing} — needs velocities (a .trr) at extract time."
+        )
+
+    frame_mask, t0_ps = _optional_window(data["time_ps"], window_path)
+    times = data["time_ps"][frame_mask]
+    # orientation_dependent_friction hard-codes its theta bins to [0, 90] deg,
+    # so it needs tilt (theta and pi-theta folded together), not raw theta:
+    # feeding it raw theta silently dumped every frame past 90deg into the top
+    # bin instead of its true tilt bin. psi must be folded *in step* with
+    # theta (fold_tilt_and_psi), not shifted independently — theta and psi
+    # are both computed from the same headless axis, so folding theta alone
+    # leaves psi split into two clusters pi apart. The recentre on top is a
+    # separate, purely cosmetic wrap-centering step.
+    tilt, psi_folded = fold_tilt_and_psi(data["theta"][frame_mask], data["psi"][frame_mask])
+    theta_deg = np.degrees(tilt)
+    psi_deg = np.degrees(_recentre_psi(psi_folded))
+    omega_vec = data["omega_vector"][frame_mask]
+    moments = data["moments"][frame_mask]
+
+    # I_parallel is the moment about the spin axis — the smallest principal
+    # moment, moments[:, 0] — which L/tau/omega are decomposed against (see
+    # core.orientation.extract_orientation_trajectory); I_perp averages the
+    # two nutation axes.
+    i_parallel = float(np.mean(moments[:, 0]))
+    i_perp = float(np.mean(moments[:, 1:3]))
+
+    gamma_map = orientation_dependent_friction(
+        theta_deg, psi_deg, omega_vec, times,
+        moment_of_inertia=i_parallel,
+        theta_bins=theta_bins, psi_bins=psi_bins,
+        min_samples_per_bin=min_samples_per_bin,
+    )
+
+    max_lag = min(len(times) // 4, 2000)
+    lags_par, acf_par = autocorrelation_function(
+        data["omega_parallel_mag"][frame_mask], max_lag=max_lag
+    )
+    _, acf_perp = autocorrelation_function(data["omega_perp_mag"][frame_mask], max_lag=max_lag)
+    dt = float(np.mean(np.diff(times)))
+    aniso = anisotropic_friction_tensor(acf_par, acf_perp, lags_par * dt, i_parallel, i_perp)
+
+    result = {
+        "theta_edges": gamma_map["theta_edges"],
+        "psi_edges": gamma_map["psi_edges"],
+        "gamma_map": gamma_map["gamma_map"],
+        "tau_c_map": gamma_map["tau_c_map"],
+        "counts": gamma_map["counts"],
+        "i_parallel": np.float64(i_parallel),
+        "i_perp": np.float64(i_perp),
+        "gamma_parallel": np.float64(aniso["gamma_parallel"]),
+        "gamma_perp": np.float64(aniso["gamma_perp"]),
+        "anisotropy": np.float64(aniso["anisotropy"]),
+        "t0_ps": np.float64(t0_ps if t0_ps is not None else np.nan),
+    }
+    save_npz(output, result)
+
+    n_valid = int(np.sum(~np.isnan(gamma_map["gamma_map"])))
+    print(
+        f"✓ {output}\n"
+        f"{_frame_count_line(frame_mask, t0_ps)}\n"
+        f"  gamma(theta,psi): {n_valid}/{gamma_map['gamma_map'].size} valid bins, "
+        f"mean gamma = {np.nanmean(gamma_map['gamma_map']):.1f} amu/ps\n"
+        f"  anisotropy gamma_perp/gamma_parallel = {aniso['anisotropy']:.2f} "
+        f"(gamma_par={aniso['gamma_parallel']:.1f}, gamma_perp={aniso['gamma_perp']:.1f})"
+    )
+
+    if figure is not None:
+        from rotmd.viz import plot_friction_extraction, plot_friction_map
+
+        plot_friction_map(
+            gamma_map["gamma_map"], gamma_map["theta_centers"], gamma_map["psi_centers"],
+            output=figure, title=input_npz.stem,
+        )
+        print(f"✓ {figure}")
+
+        # The map's per-bin gamma is a fit; these two show the Green-Kubo
+        # extraction it's built on for the parallel/perpendicular components,
+        # so a plateau (vs. a still-drifting integral) can actually be checked.
+        for label, acf_component, gamma_component in (
+            ("parallel", acf_par, aniso["gamma_parallel"]),
+            ("perp", acf_perp, aniso["gamma_perp"]),
+        ):
+            companion = figure.with_name(f"{figure.stem}_extraction_{label}{figure.suffix}")
+            plot_friction_extraction(
+                lags_par * dt, acf_component, gamma_component,
+                output=companion, title=f"{input_npz.stem} ({label})",
+            )
+            print(f"✓ {companion}")
+
+    return output
+
+
+def pmf(
+    input_npz: Path,
+    window_path: Path | None,
+    output: Path,
+    theta_bins: int,
+    psi_bins: int,
+    temperature: float,
+    force: bool,
+    figure: Path | None = None,
+) -> Path:
+    """PMF F(tilt, psi) with the SO(3) Jacobian correction, optionally windowed."""
+    from rotmd.analysis.pmf import compute_pmf_1d, compute_pmf_2d
+    from rotmd.core.orientation import fold_tilt_and_psi
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    data = load_npz(input_npz)
+    missing = [k for k in ("time_ps", "theta", "psi") if k not in data]
+    if missing:
+        raise SystemExit(f"{input_npz} lacks {missing}.")
+
+    frame_mask, t0_ps = _optional_window(data["time_ps"], window_path)
+    # tilt folds theta and pi-theta together (the extracted principal axis is
+    # a headless line, so those raw-theta values are one physical orientation,
+    # not two — see rotmd.analysis.pmf's _ANGLE_CONVENTIONS). psi must fold in
+    # step with theta (fold_tilt_and_psi), since both come from the same
+    # headless axis — folding theta alone leaves psi split into two clusters
+    # pi apart, which is exactly the "two disconnected minima" artifact this
+    # fixes. The recentre on top is a separate, purely cosmetic step so a
+    # cluster straddling the 0/360deg wrap plots as one blob in the middle.
+    theta, psi = fold_tilt_and_psi(data["theta"][frame_mask], data["psi"][frame_mask])
+    psi = _recentre_psi(psi)
+
+    pmf_2d = compute_pmf_2d(
+        theta, psi, theta_bins=theta_bins, psi_bins=psi_bins,
+        temperature=temperature, angle_kind="tilt",
+    )
+    pmf_theta = compute_pmf_1d(theta, bins=theta_bins, coordinate_type="tilt", temperature=temperature)
+    pmf_psi = compute_pmf_1d(psi, bins=psi_bins, coordinate_type="psi", temperature=temperature)
+
+    result = {
+        "pmf_2d": pmf_2d["pmf"],
+        "tilt_edges": pmf_2d["theta_edges"],
+        "psi_edges": pmf_2d["psi_edges"],
+        "counts_2d": pmf_2d["counts"],
+        "pmf_tilt": pmf_theta["pmf"],
+        "tilt_centers": pmf_theta["centers"],
+        "pmf_psi": pmf_psi["pmf"],
+        "psi_centers": pmf_psi["centers"],
+        "t0_ps": np.float64(t0_ps if t0_ps is not None else np.nan),
+    }
+    save_npz(output, result)
+
+    min_idx = np.unravel_index(np.nanargmin(pmf_2d["pmf"]), pmf_2d["pmf"].shape)
+    print(
+        f"✓ {output}\n"
+        f"{_frame_count_line(frame_mask, t0_ps)}\n"
+        f"  F(tilt,psi) minimum at tilt={np.degrees(pmf_2d['theta_centers'][min_idx[0]]):.1f}deg, "
+        f"psi={np.degrees(pmf_2d['psi_centers'][min_idx[1]]):.1f}deg (psi recentred: raw psi + 180deg)\n"
+        f"  {int(np.sum(pmf_2d['counts'] > 0))}/{pmf_2d['counts'].size} populated bins"
+    )
+
+    if figure is not None:
+        from rotmd.viz import plot_pmf_contour, plot_pmf_heatmap
+
+        plot_pmf_heatmap(
+            pmf_2d["pmf"], pmf_2d["theta_centers"], pmf_2d["psi_centers"],
+            output=figure, title=input_npz.stem, angle_kind="tilt",
+        )
+        print(f"✓ {figure}")
+
+        contour = figure.with_name(f"{figure.stem}_contour{figure.suffix}")
+        plot_pmf_contour(
+            pmf_2d["pmf"], pmf_2d["theta_centers"], pmf_2d["psi_centers"],
+            output=contour, title=input_npz.stem, angle_kind="tilt",
+        )
+        print(f"✓ {contour}")
+
+    return output
+
+
+def _parse_state_thresholds(spec: str) -> list[tuple[float, float]]:
+    """Parse ``'lo-hi,lo-hi'`` (degrees, over tilt in ``[0, 90]``) into radian ``(lo, hi)`` ranges for :func:`identify_states`."""
+    thresholds = []
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "-" not in item:
+            raise ValueError(f"state threshold {item!r}: expected 'lo-hi'")
+        lo_s, _, hi_s = item.partition("-")
+        lo, hi = float(lo_s), float(hi_s)
+        if lo > hi:
+            raise ValueError(f"state threshold {item!r}: lo ({lo}) > hi ({hi})")
+        thresholds.append((np.radians(lo), np.radians(hi)))
+    if len(thresholds) < 2:
+        raise ValueError("need at least 2 --state-thresholds to define a transition")
+    return thresholds
+
+
+def transitions(
+    input_npz: Path,
+    window_path: Path | None,
+    state_thresholds: str,
+    output: Path,
+    min_duration: int,
+    force: bool,
+    figure: Path | None = None,
+) -> Path:
+    """Metastable states over tilt, transition kinetics and the transition path ensemble, optionally windowed."""
+    from rotmd.analysis.transitions import (
+        committor_probability,
+        identify_states,
+        transition_path_ensemble,
+        transmission_coefficient,
+    )
+    from rotmd.core.orientation import membrane_tilt_angle
+    from rotmd.io.output import load_npz, save_npz
+
+    if output.exists() and not force:
+        print(f"✓ {output} exists — skipping (use --force to overwrite)")
+        return output
+
+    data = load_npz(input_npz)
+    missing = [k for k in ("time_ps", "theta") if k not in data]
+    if missing:
+        raise SystemExit(f"{input_npz} lacks {missing}.")
+
+    thresholds = _parse_state_thresholds(state_thresholds)
+    frame_mask, t0_ps = _optional_window(data["time_ps"], window_path)
+    times = data["time_ps"][frame_mask]
+    # tilt, not raw theta: theta and pi-theta are the same physical
+    # orientation (see friction()/pmf()'s comments), so a state defined on raw
+    # theta would need a mirrored threshold pair ("0-30,150-180") to avoid
+    # splitting one state into two; tilt needs only "0-30".
+    tilt = membrane_tilt_angle(data["theta"][frame_mask])
+
+    states, state_info = identify_states(tilt, thresholds, min_duration=min_duration)
+
+    result: dict[str, np.ndarray] = {
+        "states": states,
+        "times": times,
+        "t0_ps": np.float64(t0_ps if t0_ps is not None else np.nan),
+        **{k: np.float64(v) for k, v in state_info.items()},
+    }
+
+    n_states = len(thresholds)
+    lines = [f"✓ {output}", _frame_count_line(frame_mask, t0_ps)]
+    for i in range(n_states):
+        lo, hi = np.degrees(thresholds[i])
+        lines.append(
+            f"  state {i} ({lo:.0f}-{hi:.0f}deg): "
+            f"population {state_info[f'state_{i}_population']:.1%}"
+        )
+    lines.append(f"  transition region: {state_info['transition_fraction']:.1%}")
+
+    for i in range(n_states):
+        for j in range(i + 1, n_states):
+            if not (state_info[f"state_{i}_population"] and state_info[f"state_{j}_population"]):
+                continue
+
+            kappa, info = transmission_coefficient(states, i, j, verbose=False)
+            result[f"kappa_{i}_{j}"] = np.float64(kappa)
+            result[f"n_transitions_{i}_{j}"] = np.int64(
+                info["n_AB_transitions"] + info["n_BA_transitions"]
+            )
+            lines.append(
+                f"  kappa({i}->{j}) = {kappa:.3f} "
+                f"({info['n_AB_transitions']}+{info['n_BA_transitions']} transitions)"
+            )
+
+            bin_centers, p_b = committor_probability(states, i, j)
+            if len(bin_centers):
+                result[f"committor_bins_{i}_{j}"] = bin_centers
+                result[f"committor_p_{i}_{j}"] = p_b
+
+            ensemble = transition_path_ensemble(states, i, j)
+            result[f"path_lengths_{i}_{j}"] = ensemble["lengths"]
+
+    save_npz(output, result)
+    print("\n".join(lines))
+
+    if figure is not None:
+        from rotmd.viz import plot_committor, plot_state_trajectory
+
+        plot_state_trajectory(times / 1000.0, states, output=figure, title=input_npz.stem)
+        print(f"✓ {figure}")
+
+        for i in range(n_states):
+            for j in range(i + 1, n_states):
+                bins_key, p_key = f"committor_bins_{i}_{j}", f"committor_p_{i}_{j}"
+                if bins_key not in result:
+                    continue
+                companion = figure.with_name(f"{figure.stem}_committor_{i}_{j}{figure.suffix}")
+                plot_committor(
+                    result[bins_key], result[p_key],
+                    kappa=float(result[f"kappa_{i}_{j}"]), labels=(f"state {i}", f"state {j}"),
+                    output=companion, title=input_npz.stem,
+                )
+                print(f"✓ {companion}")
+
     return output
 
 
@@ -1054,6 +1471,96 @@ def main(argv: list[str] | None = None) -> int:
     p_dccm.add_argument("-o", "--output", required=True, type=Path)
     p_dccm.add_argument("--force", action="store_true")
 
+    p_corr = sub.add_parser(
+        "correlations",
+        help="Angular velocity/momentum ACF and correlation time",
+        description="Autocorrelation of the angular velocity (and momentum, "
+                    "if available) over the production window — the "
+                    "correlation time `friction` reads a coefficient off of.",
+    )
+    p_corr.add_argument("input", type=Path, help="Merged .npz carrying omega_vector")
+    p_corr.add_argument(
+        "--window", type=Path,
+        help="window.json from `rotmd equilibrate`; omit to use the whole trajectory",
+    )
+    p_corr.add_argument("-o", "--output", required=True, type=Path)
+    p_corr.add_argument(
+        "--component", choices=["x", "y", "z"], default=None,
+        help="Angular velocity component to analyse (default: |omega|)",
+    )
+    p_corr.add_argument(
+        "--max-lag", type=int, default=None, help="Max ACF lag in frames (default: n_frames // 2)"
+    )
+    p_corr.add_argument("--figure", type=Path, help="Also render the ACF plot here")
+    p_corr.add_argument("--force", action="store_true")
+
+    p_fric = sub.add_parser(
+        "friction",
+        help="Orientation-dependent friction gamma(theta, psi)",
+        description="Bins the trajectory by tilt/spin angle and fits a "
+                    "friction coefficient from the angular-velocity ACF in "
+                    "each bin; also reports the spin/nutation anisotropy.",
+    )
+    p_fric.add_argument("input", type=Path, help="Merged .npz carrying omega_vector and moments")
+    p_fric.add_argument(
+        "--window", type=Path, help="window.json; omit to use the whole trajectory"
+    )
+    p_fric.add_argument("-o", "--output", required=True, type=Path)
+    p_fric.add_argument("--theta-bins", type=int, default=10, help="Bins for theta in [0, 90] deg")
+    p_fric.add_argument("--psi-bins", type=int, default=12, help="Bins for psi in [0, 360] deg")
+    p_fric.add_argument(
+        "--min-samples-per-bin", type=int, default=50,
+        help="Bins with fewer frames than this are left NaN rather than fit",
+    )
+    p_fric.add_argument("--figure", type=Path, help="Also render the gamma(theta, psi) heatmap here")
+    p_fric.add_argument("--force", action="store_true")
+
+    p_pmf = sub.add_parser(
+        "pmf",
+        help="Potential of mean force F(theta, psi) with Jacobian correction",
+        description="2D and marginal 1D PMF over the tilt/spin angles, over "
+                    "the production window, with the sin(theta) SO(3) "
+                    "volume-element correction applied.",
+    )
+    p_pmf.add_argument("input", type=Path, help="Merged .npz carrying theta/psi")
+    p_pmf.add_argument(
+        "--window", type=Path, help="window.json; omit to use the whole trajectory"
+    )
+    p_pmf.add_argument("-o", "--output", required=True, type=Path)
+    p_pmf.add_argument("--theta-bins", type=int, default=30)
+    p_pmf.add_argument("--psi-bins", type=int, default=36)
+    p_pmf.add_argument("--temperature", type=float, default=310.15, help="Kelvin")
+    p_pmf.add_argument("--figure", type=Path, help="Also render the PMF heatmap + marginals here")
+    p_pmf.add_argument("--force", action="store_true")
+
+    p_trans = sub.add_parser(
+        "transitions",
+        help="Metastable states over tilt and transition kinetics",
+        description="Partitions tilt (theta and pi-theta folded together — "
+                    "see membrane_tilt_angle) into states via "
+                    "--state-thresholds, then reports the transmission "
+                    "coefficient, committor and transition path ensemble for "
+                    "every populated pair.",
+    )
+    p_trans.add_argument("input", type=Path, help="Merged .npz carrying theta")
+    p_trans.add_argument(
+        "--window", type=Path, help="window.json; omit to use the whole trajectory"
+    )
+    p_trans.add_argument(
+        "--state-thresholds", required=True, metavar="LO-HI,LO-HI",
+        help="Comma-separated (lo, hi) ranges in degrees over tilt "
+             "([0, 90], not raw theta's [0, 180]), e.g. '0-30,60-90'",
+    )
+    p_trans.add_argument("-o", "--output", required=True, type=Path)
+    p_trans.add_argument(
+        "--min-duration", type=int, default=10,
+        help="Minimum consecutive frames to count as a stable state (default 10)",
+    )
+    p_trans.add_argument(
+        "--figure", type=Path, help="Also render the state trajectory + committor plot here"
+    )
+    p_trans.add_argument("--force", action="store_true")
+
     p_methods = sub.add_parser(
         "methods",
         help="Auto-generate methods.json + methods.md from .mdp/topology",
@@ -1220,6 +1727,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "dccm":
         dccm(args.input, args.window, args.output, args.force)
+        return 0
+    if args.cmd == "correlations":
+        correlations(
+            args.input, args.window, args.output,
+            component=args.component, max_lag=args.max_lag, force=args.force,
+            figure=args.figure,
+        )
+        return 0
+    if args.cmd == "friction":
+        friction(
+            args.input, args.window, args.output,
+            theta_bins=args.theta_bins, psi_bins=args.psi_bins,
+            min_samples_per_bin=args.min_samples_per_bin, force=args.force,
+            figure=args.figure,
+        )
+        return 0
+    if args.cmd == "pmf":
+        pmf(
+            args.input, args.window, args.output,
+            theta_bins=args.theta_bins, psi_bins=args.psi_bins,
+            temperature=args.temperature, force=args.force,
+            figure=args.figure,
+        )
+        return 0
+    if args.cmd == "transitions":
+        transitions(
+            args.input, args.window, args.state_thresholds, args.output,
+            min_duration=args.min_duration, force=args.force,
+            figure=args.figure,
+        )
         return 0
     if args.cmd == "methods":
         if not args.mdp:

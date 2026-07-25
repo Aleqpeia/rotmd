@@ -54,11 +54,13 @@ from .spectra import (
 from .surfaces import (
     local_minima,
     plot_free_energy_landscape,
+    plot_friction_map,
     plot_pmf_3d_surface,
     plot_pmf_contour,
     plot_pmf_heatmap,
     plot_torque_vector_field,
 )
+from .transitions import plot_committor, plot_state_trajectory
 
 __all__ = [
     # API
@@ -87,6 +89,7 @@ __all__ = [
     "plot_pmf_3d_surface",
     "plot_torque_vector_field",
     "plot_free_energy_landscape",
+    "plot_friction_map",
     "local_minima",
     # Spectra
     "plot_autocorrelation",
@@ -97,4 +100,7 @@ __all__ = [
     "plot_correlation_comparison",
     "power_spectrum",
     "spectral_density",
+    # Transitions
+    "plot_state_trajectory",
+    "plot_committor",
 ]

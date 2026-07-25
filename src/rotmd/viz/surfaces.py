@@ -97,6 +97,7 @@ def plot_pmf_heatmap(
     vmax: float | None = None,
     mark_minima: bool = True,
     cmap: str = "viridis",
+    angle_kind: str = "theta",
 ) -> Any:
     """PMF over (ψ, θ) as a filled mesh, with basin minima marked.
 
@@ -106,6 +107,13 @@ def plot_pmf_heatmap(
         vmax: Colour ceiling; defaults to the 95th percentile of the finite
             values, so a few near-infinite empty bins cannot flatten the scale.
         mark_minima: Star the strict local minima.
+        angle_kind: ``"theta"`` (default) labels the y-axis over its full
+            ``[0, 180]`` degree range. ``"tilt"`` labels it ``[0, 90]``
+            instead, for PMFs computed with
+            ``rotmd.analysis.pmf.compute_pmf_2d(..., angle_kind="tilt")`` —
+            using the wrong one doesn't misplace any data, it just leaves half
+            the panel empty (``"theta"`` on a tilt PMF) or clips the axis
+            short of an out-of-range point (``"tilt"`` on a theta PMF).
     """
     pmf = np.asarray(pmf, dtype=np.float64)
     if vmax is None:
@@ -127,8 +135,57 @@ def plot_pmf_heatmap(
                 "r*", markersize=14, markeredgecolor="white", markeredgewidth=1,
             )
 
-    label_orientation_axes(ax)
+    label_orientation_axes(ax, limits=(angle_kind == "theta"))
+    if angle_kind == "tilt":
+        ax.set_xlim(0, 360)
+        ax.set_ylabel("tilt (degrees)")
+        ax.set_ylim(0, 90)
     ax.set_title("Potential of mean force")
+    return mesh
+
+
+@figure(figsize=(9, 7), name="friction-map")
+def plot_friction_map(
+    ax: Any,
+    gamma_map: np.ndarray,
+    theta_centers_deg: np.ndarray,
+    psi_centers_deg: np.ndarray,
+    *,
+    vmax: float | None = None,
+    cmap: str = "viridis",
+) -> Any:
+    """Orientation-dependent friction gamma(theta, psi) as a filled mesh.
+
+    Args:
+        gamma_map: ``(n_theta, n_psi)`` friction coefficient in amu/ps; NaN in
+            bins with too few samples to fit (see
+            :func:`rotmd.analysis.friction.orientation_dependent_friction`).
+        theta_centers_deg, psi_centers_deg: Bin centres, already in
+            **degrees** — unlike the PMF bins above, friction bins natively in
+            degrees (``orientation_dependent_friction`` hard-codes its ranges
+            as ``[0, 90]``/``[0, 360]``), so this does not go through
+            :func:`~rotmd.viz.core.angle_grid_degrees`, which expects radians.
+        vmax: Colour ceiling; defaults to the 95th percentile of the finite
+            (fitted) bins, so sparse-bin NaNs cannot flatten the scale.
+    """
+    gamma_map = np.asarray(gamma_map, dtype=np.float64)
+    if vmax is None:
+        vmax = finite_percentile(gamma_map, 95)
+
+    psi_grid, theta_grid = np.meshgrid(
+        np.asarray(psi_centers_deg, dtype=np.float64),
+        np.asarray(theta_centers_deg, dtype=np.float64),
+    )
+    mesh = ax.pcolormesh(
+        psi_grid, theta_grid, np.clip(gamma_map, 0, vmax),
+        cmap=cmap, shading="auto", vmin=0, vmax=vmax,
+    )
+    ax.figure.colorbar(mesh, ax=ax, label="gamma (amu/ps)")
+
+    label_orientation_axes(ax, limits=False)
+    ax.set_xlim(psi_grid.min(), psi_grid.max())
+    ax.set_ylim(0, 90)  # friction bins only span [0, 90] deg, unlike full theta
+    ax.set_title("Orientation-dependent friction")
     return mesh
 
 
@@ -142,8 +199,14 @@ def plot_pmf_contour(
     n_levels: int = 15,
     vmax: float | None = None,
     cmap: str = "coolwarm",
+    angle_kind: str = "theta",
 ) -> Any:
-    """PMF as filled contours with labelled iso-energy lines."""
+    """PMF as filled contours with labelled iso-energy lines.
+
+    Args:
+        angle_kind: See :func:`plot_pmf_heatmap` — ``"tilt"`` labels the
+            y-axis ``[0, 90]`` degrees instead of the full ``[0, 180]``.
+    """
     pmf = np.asarray(pmf, dtype=np.float64)
     if vmax is None:
         vmax = finite_percentile(pmf, 95)
@@ -158,7 +221,11 @@ def plot_pmf_contour(
     ax.clabel(lines, inline=True, fontsize=8, fmt="%.1f")
     ax.figure.colorbar(filled, ax=ax, label="PMF (kcal/mol)")
 
-    label_orientation_axes(ax)
+    label_orientation_axes(ax, limits=(angle_kind == "theta"))
+    if angle_kind == "tilt":
+        ax.set_xlim(0, 360)
+        ax.set_ylabel("tilt (degrees)")
+        ax.set_ylim(0, 90)
     ax.set_title("PMF contours")
     return filled
 
