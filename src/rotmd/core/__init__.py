@@ -20,6 +20,8 @@ from .inertia import (
 from .orientation import (
     rotation_matrix_to_euler_zyz,
     membrane_tilt_angle,
+    fold_tilt_and_psi,
+    fold_tilt_and_psi_continuous,
     extract_orientation_trajectory,
 )
 from .vector_observables import (
@@ -39,6 +41,8 @@ __all__ = [
     # orientation
     "rotation_matrix_to_euler_zyz",
     "membrane_tilt_angle",
+    "fold_tilt_and_psi",
+    "fold_tilt_and_psi_continuous",
     "extract_orientation_trajectory",
     # vector observables
     "VectorObservable",
