@@ -76,4 +76,9 @@ html_static_path = []
 myst_enable_extensions = [
     "colon_fence",
     "deflist",
+    # $...$ / $$...$$ in Markdown, rendered by sphinx.ext.mathjax. The design
+    # notes carry their derivations as real maths rather than ASCII, and
+    # without this they render as literal dollar signs.
+    "dollarmath",
+    "amsmath",
 ]

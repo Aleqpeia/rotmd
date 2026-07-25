@@ -29,6 +29,13 @@ pipeline
 
 ```{toctree}
 :maxdepth: 2
+:caption: Design notes
+
+membrane_frame
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: API Reference
 
 api/index
